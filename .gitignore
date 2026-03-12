@@ -1,0 +1,22 @@
+.env
+.env.*
+!.env.example
+
+.streamlit/secrets.toml
+.streamlit/*.local.toml
+!.streamlit/secrets.toml.example
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+
+# Local debug and exploratory scripts (do not publish)
+test_*.py
+find_*.py
+workbench.py
+v1-new_app.py
+feishu_bitable.py
+demo_users.json
+!demo_users.example.json

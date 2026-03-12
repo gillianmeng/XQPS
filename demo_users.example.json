@@ -1,0 +1,28 @@
+{
+  "users": [
+    {
+      "label": "Demo管理者A (工号: DEMO001)",
+      "name": "DemoManagerA",
+      "open_id": "ou_demo_manager_a",
+      "emp_id": "DEMO001",
+      "job_title": "部门负责人",
+      "role": "管理者"
+    },
+    {
+      "label": "Demo员工A (工号: DEMO101)",
+      "name": "DemoEmployeeA",
+      "open_id": "ou_demo_emp_a",
+      "emp_id": "DEMO101",
+      "job_title": "产品经理",
+      "role": "员工"
+    },
+    {
+      "label": "Demo员工B (工号: DEMO102)",
+      "name": "DemoEmployeeB",
+      "open_id": "ou_demo_emp_b",
+      "emp_id": "DEMO102",
+      "job_title": "运营经理",
+      "role": "员工"
+    }
+  ]
+}
