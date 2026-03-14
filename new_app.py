@@ -5,6 +5,11 @@ import time
 from collections import Counter
 import os
 import json
+import csv
+import io
+import math
+import pandas as pd
+import altair as alt
 
 # --- 配置区：严禁在代码中硬编码密钥 ---
 # 支持两种来源（优先级从高到低）：
@@ -36,6 +41,7 @@ if missing:
     st.stop()
 
 SCORE_OPTIONS = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+GRADE_OPTIONS = ["S", "A", "B+", "B", "B-", "C"]
 
 # --- 初始化会话状态 ---
 if 'user_info' not in st.session_state:
@@ -52,9 +58,38 @@ if 'selected_subordinate_id' not in st.session_state:
     st.session_state.selected_subordinate_id = None
 
 # --- 飞书原生 API 安全接口 ---
+REQUEST_TIMEOUT_SEC = 12
+REQUEST_RETRY_TIMES = 2
+
+
+def _request_json_with_retry(method, url, headers=None, params=None, json_data=None):
+    last_err = None
+    for attempt in range(REQUEST_RETRY_TIMES + 1):
+        try:
+            resp = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                params=params,
+                json=json_data,
+                timeout=REQUEST_TIMEOUT_SEC,
+            )
+            return resp.json()
+        except Exception as e:
+            last_err = e
+            if attempt < REQUEST_RETRY_TIMES:
+                time.sleep(0.35 * (attempt + 1))
+    return {"code": -1, "msg": f"请求失败：{last_err}"}
+
+
+@st.cache_data(ttl=300)
 def get_tenant_token():
     token_url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
-    res = requests.post(token_url, json={"app_id": APP_ID, "app_secret": APP_SECRET}).json()
+    res = _request_json_with_retry(
+        "POST",
+        token_url,
+        json_data={"app_id": APP_ID, "app_secret": APP_SECRET},
+    )
     return res.get("tenant_access_token")
 
 def get_feishu_user(code):
@@ -64,7 +99,7 @@ def get_feishu_user(code):
     user_url = "https://open.feishu.cn/open-apis/authen/v1/access_token"
     headers = {"Authorization": f"Bearer {tenant_token}"}
     payload = {"grant_type": "authorization_code", "code": code}
-    res = requests.post(user_url, headers=headers, json=payload).json()
+    res = _request_json_with_retry("POST", user_url, headers=headers, json_data=payload)
     if res.get("code") == 0:
         return res.get("data"), None
     return None, res.get('msg')
@@ -72,6 +107,8 @@ def get_feishu_user(code):
 @st.cache_data(ttl=60)
 def fetch_all_records_safely(app_token, table_id):
     tenant_token = get_tenant_token()
+    if not tenant_token:
+        return []
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records"
     headers = {"Authorization": f"Bearer {tenant_token}"}
     all_items = []
@@ -81,7 +118,7 @@ def fetch_all_records_safely(app_token, table_id):
         params = {"page_size": 100}
         if page_token:
             params["page_token"] = page_token
-        res = requests.get(url, headers=headers, params=params).json()
+        res = _request_json_with_retry("GET", url, headers=headers, params=params)
         if res.get("code") == 0:
             data = res.get("data", {})
             all_items.extend(data.get("items", []))
@@ -91,8 +128,17 @@ def fetch_all_records_safely(app_token, table_id):
             break
     return all_items
 
-def get_record_by_openid_safely(app_token, table_id, target_openid):
+def get_record_by_openid_safely(app_token, table_id, target_openid, fallback_name="", fallback_emp_id=""):
     all_records = fetch_all_records_safely(app_token, table_id)
+    def _to_text(v):
+        if isinstance(v, list):
+            if v and isinstance(v[0], dict):
+                return str(v[0].get("name") or v[0].get("text") or "")
+            return str(v[0]) if v else ""
+        if isinstance(v, dict):
+            return str(v.get("name") or v.get("text") or "")
+        return str(v or "")
+    # 1) 优先按 open_id 命中
     for record in all_records:
         fields = record.get("fields", {})
         value = fields.get("姓名")
@@ -102,14 +148,62 @@ def get_record_by_openid_safely(app_token, table_id, target_openid):
             return record
         elif isinstance(value, dict) and value.get("id") == target_openid:
             return record
+    # 2) demo 场景兜底：按姓名 / 工号命中
+    fb_name = str(fallback_name or "").strip()
+    fb_emp = str(fallback_emp_id or "").strip()
+    if fb_name or fb_emp:
+        for record in all_records:
+            fields = record.get("fields", {})
+            rec_name = _to_text(fields.get("姓名")).strip()
+            rec_emp = _to_text(fields.get("工号") or fields.get("员工工号")).strip()
+            if (fb_name and rec_name == fb_name) or (fb_emp and rec_emp == fb_emp):
+                return record
     return None
+
+@st.cache_data(ttl=300)
+def fetch_table_field_names(app_token, table_id):
+    tenant_token = get_tenant_token()
+    if not tenant_token:
+        return set()
+    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields"
+    headers = {"Authorization": f"Bearer {tenant_token}"}
+    page_token = ""
+    has_more = True
+    field_names = set()
+    while has_more:
+        params = {"page_size": 200}
+        if page_token:
+            params["page_token"] = page_token
+        res = _request_json_with_retry("GET", url, headers=headers, params=params)
+        if res.get("code") != 0:
+            break
+        data = res.get("data", {})
+        for item in data.get("items", []):
+            name = str(item.get("field_name", "")).strip()
+            if name:
+                field_names.add(name)
+        has_more = data.get("has_more", False)
+        page_token = data.get("page_token", "")
+    return field_names
+
 
 def update_record_safely(app_token, table_id, record_id, update_data):
     tenant_token = get_tenant_token()
+    if not tenant_token:
+        return False, "获取 Token 失败"
+
+    valid_fields = fetch_table_field_names(app_token, table_id)
+    if valid_fields:
+        cleaned = {k: v for k, v in (update_data or {}).items() if k in valid_fields}
+        dropped = [k for k in (update_data or {}).keys() if k not in cleaned]
+        if dropped and not cleaned:
+            return False, f"字段不存在：{', '.join(dropped)}"
+        update_data = cleaned
+
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}"
     headers = {"Authorization": f"Bearer {tenant_token}", "Content-Type": "application/json"}
     payload = {"fields": update_data}
-    res = requests.put(url, headers=headers, json=payload).json()
+    res = _request_json_with_retry("PUT", url, headers=headers, json_data=payload)
     if res.get("code") == 0:
         return True, "成功"
     else:
@@ -244,7 +338,7 @@ def login_page():
                 st.caption("未配置员工测试账号")
 
         if not demo_users:
-            st.warning("未读取到 demo_users.json，可参考 demo_users.example.json 创建本地测试账号。")
+            st.info("💡 提示：未读取到 demo_users.json，可参考 demo_users.example.json 创建本地测试账号。")
 
 def jump_to_subordinate(sub_id):
     st.session_state.selected_subordinate_id = sub_id
@@ -257,9 +351,25 @@ def main_app():
     # --- 注入自定义 CSS ---
     st.markdown("""
     <style>
-    /* 全局基础字体：正文统一 14px，模块标题统一样式 */
-    body, [data-testid="stMarkdown"] p, [data-testid="stMarkdown"] li {
+    /* 全局基础字体：正文统一 14px */
+    body, [data-testid="stMarkdown"] p, [data-testid="stMarkdown"] li, [data-testid="stMarkdown"] label, [data-testid="stMarkdown"] span {
         font-size: 14px !important;
+    }
+    /* 全局标题：统一字号（强制命中 st.header 与 markdown 标题） */
+    .stApp h1,
+    .stApp h2,
+    .stApp h3,
+    .stApp h4,
+    .stApp h5,
+    .stApp h6,
+    [data-testid="stMarkdown"] h1,
+    [data-testid="stMarkdown"] h2,
+    [data-testid="stMarkdown"] h3,
+    [data-testid="stMarkdown"] h4,
+    [data-testid="stMarkdown"] h5,
+    [data-testid="stMarkdown"] h6 {
+        font-size: 24px !important;
+        line-height: 1.25 !important;
     }
     .section-title {
         font-size: 16px;
@@ -267,12 +377,28 @@ def main_app():
         margin: 0 0 10px 0;
         color: #FAFAFA;
     }
+    /* 业务模块标题（统一 24px） */
+    .module-title {
+        font-size: 24px !important;
+        font-weight: 700 !important;
+        line-height: 1.25 !important;
+        margin: 0 0 8px 0 !important;
+        color: #FAFAFA !important;
+    }
+    .hero-title {
+        font-size: 28px !important;
+        font-weight: 700 !important;
+        line-height: 1.25 !important;
+        margin: 0 0 8px 0 !important;
+        color: #FAFAFA !important;
+    }
 
     /* 允许所有文本域横向和纵向拉伸 */
     textarea {
         resize: both !important;
     }
 
+    /* 文本框右下角拖拽区域样式 */
     textarea::-webkit-resizer {
         width: 24px !important;
         height: 24px !important;
@@ -280,6 +406,11 @@ def main_app():
         background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="%23888888" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="14 20 20 20 20 14"></polyline><line x1="10" y1="10" x2="20" y2="20"></line></svg>') !important;
         background-repeat: no-repeat !important;
         background-position: bottom 4px right 4px !important; 
+    }
+    /* 文本框占位提示：更小、更浅色 */
+    textarea::placeholder {
+        font-size: 12px !important;
+        color: #777777 !important;
     }
     [data-testid="stSidebar"] .stButton button {
         font-size: 14px !important;
@@ -307,43 +438,44 @@ def main_app():
         border-color: #81c784 !important;
     }
 
-    /* 👇 导航栏专属发光与动态触感特效 (最新兼容版) */
+    /* 分页标签：统一字号与风格（不再固定） */
     [data-testid="stTabs"] {
-        gap: 8px; 
+        gap: 8px;
     }
-    /* 1. 强制修改选中的底线（红线变电光蓝） */
+    /* 隐藏底部高亮线，使用按钮本身区分选中态 */
     [data-testid="stTabs"] div[data-baseweb="tab-highlight"] {
-        background-color: #1E90FF !important;
-        height: 4px !important; /* 线条加厚 */
+        background-color: transparent !important;
+        height: 0px !important;
     }
-
-    /* 2. 基础 Tab 按钮样式 */
+    /* 基础 Tab 按钮 */
     [data-testid="stTabs"] button[role="tab"] {
-        padding: 10px 20px !important;
-        transition: all 0.3s ease !important;
-        font-size: 16px !important; 
+        padding: 8px 16px !important;
+        transition: all 0.2s ease !important;
+        font-size: 15px !important;
+        font-weight: 600 !important;
         color: #b0b0b0 !important;
+        border: 1px solid rgba(255,255,255,0.16) !important;
+        border-radius: 8px !important;
+        background-color: rgba(255,255,255,0.02) !important;
+        min-height: 38px !important;
     }
-
-    /* 3. 选中状态：字体变大、变粗、变蓝 */
+    /* 选中态：仅改颜色/粗细，不改字号 */
     [data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
-        background-color: rgba(30, 144, 255, 0.1) !important;
-        color: #66b2ff !important; 
-        font-size: 20px !important; /* 字体加大到 20px */
-        font-weight: 800 !important; /* 极粗体 */
+        background-color: rgba(30, 144, 255, 0.16) !important;
+        color: #8fc9ff !important;
+        font-size: 15px !important;
+        font-weight: 700 !important;
         border: 1px solid #1E90FF !important;
-        border-bottom: 2px solid transparent !important;
-        box-shadow: 0px -4px 15px rgba(30, 144, 255, 0.4), inset 0px 2px 5px rgba(30, 144, 255, 0.2) !important;
-        transform: translateY(-2px) !important;
+        box-shadow: none !important;
+        transform: none !important;
     }
     [data-testid="stTabs"] button[role="tab"]:hover {
-        background-color: rgba(30, 144, 255, 0.05) !important;
-        border-color: rgba(30, 144, 255, 0.2) !important;
+        background-color: rgba(30, 144, 255, 0.08) !important;
+        border-color: rgba(30, 144, 255, 0.35) !important;
     }
-    /* 点击瞬间的物理反馈 */
     [data-testid="stTabs"] button[role="tab"]:active {
-        transform: translateY(2px) !important; 
-        box-shadow: 0px -1px 5px rgba(30, 144, 255, 0.5) !important;
+        transform: none !important;
+        box-shadow: none !important;
     }
     /* 指标（Metric）与正文一致 14px */
     [data-testid="stMetricValue"] {
@@ -351,6 +483,104 @@ def main_app():
     }
     [data-testid="stMetricLabel"] {
         font-size: 14px !important;
+    }
+    /* 报表 KPI 数字按钮（用于下钻） */
+    div.element-container:has(.report-kpi-total),
+    div.element-container:has(.report-kpi-done),
+    div.element-container:has(.report-kpi-rate),
+    div.element-container:has(.report-kpi-pending),
+    div.element-container:has(.report-kpi-grade-s),
+    div.element-container:has(.report-kpi-grade-a),
+    div.element-container:has(.report-kpi-grade-bp),
+    div.element-container:has(.report-kpi-grade-b),
+    div.element-container:has(.report-kpi-grade-bm),
+    div.element-container:has(.report-kpi-grade-c) {
+        display: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        min-height: 0 !important;
+        height: 0 !important;
+    }
+    div.element-container:has(.report-kpi-total) + div.element-container,
+    div.element-container:has(.report-kpi-done) + div.element-container,
+    div.element-container:has(.report-kpi-rate) + div.element-container,
+    div.element-container:has(.report-kpi-pending) + div.element-container,
+    div.element-container:has(.report-kpi-grade-s) + div.element-container,
+    div.element-container:has(.report-kpi-grade-a) + div.element-container,
+    div.element-container:has(.report-kpi-grade-bp) + div.element-container,
+    div.element-container:has(.report-kpi-grade-b) + div.element-container,
+    div.element-container:has(.report-kpi-grade-bm) + div.element-container,
+    div.element-container:has(.report-kpi-grade-c) + div.element-container {
+        display: flex !important;
+        justify-content: center !important;
+        align-items: center !important;
+        margin-top: 2px !important;
+    }
+    div.element-container:has(.report-kpi-total) + div.element-container button,
+    div.element-container:has(.report-kpi-done) + div.element-container button,
+    div.element-container:has(.report-kpi-rate) + div.element-container button,
+    div.element-container:has(.report-kpi-pending) + div.element-container button,
+    div.element-container:has(.report-kpi-grade-s) + div.element-container button,
+    div.element-container:has(.report-kpi-grade-a) + div.element-container button,
+    div.element-container:has(.report-kpi-grade-bp) + div.element-container button,
+    div.element-container:has(.report-kpi-grade-b) + div.element-container button,
+    div.element-container:has(.report-kpi-grade-bm) + div.element-container button,
+    div.element-container:has(.report-kpi-grade-c) + div.element-container button {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+        min-height: 44px !important;
+        height: 44px !important;
+        font-size: 36px !important;
+        font-weight: 900 !important;
+        line-height: 1 !important;
+    }
+    div.element-container:has(.report-kpi-total) + div.element-container button *,
+    div.element-container:has(.report-kpi-done) + div.element-container button *,
+    div.element-container:has(.report-kpi-rate) + div.element-container button *,
+    div.element-container:has(.report-kpi-pending) + div.element-container button *,
+    div.element-container:has(.report-kpi-grade-s) + div.element-container button *,
+    div.element-container:has(.report-kpi-grade-a) + div.element-container button *,
+    div.element-container:has(.report-kpi-grade-bp) + div.element-container button *,
+    div.element-container:has(.report-kpi-grade-b) + div.element-container button *,
+    div.element-container:has(.report-kpi-grade-bm) + div.element-container button *,
+    div.element-container:has(.report-kpi-grade-c) + div.element-container button * {
+        font-weight: 900 !important;
+    }
+    div.element-container:has(.report-kpi-total) + div.element-container button { color: #42A5F5 !important; }
+    div.element-container:has(.report-kpi-done) + div.element-container button { color: #26A69A !important; }
+    div.element-container:has(.report-kpi-rate) + div.element-container button { color: #FFA726 !important; }
+    div.element-container:has(.report-kpi-pending) + div.element-container button { color: #EF5350 !important; }
+    div.element-container:has(.report-kpi-grade-s) + div.element-container button { color: #4CAF50 !important; }
+    div.element-container:has(.report-kpi-grade-a) + div.element-container button { color: #42A5F5 !important; }
+    div.element-container:has(.report-kpi-grade-bp) + div.element-container button { color: #66BB6A !important; }
+    div.element-container:has(.report-kpi-grade-b) + div.element-container button { color: #90A4AE !important; }
+    div.element-container:has(.report-kpi-grade-bm) + div.element-container button { color: #FFB74D !important; }
+    div.element-container:has(.report-kpi-grade-c) + div.element-container button { color: #EF5350 !important; }
+
+    /* 绩效概览数字样式：更醒目 */
+    .report-kpi-label {
+        font-size: 16px;
+        color: #b7bdc8;
+        text-align: center;
+        font-weight: 800;
+    }
+    .report-grade-label {
+        font-size: 16px;
+        color: #b7bdc8;
+        text-align: center;
+        font-weight: 800;
+    }
+    /* 提示框文案统一缩小（info/warning/error/success） */
+    [data-testid="stAlert"] p,
+    [data-testid="stAlert"] div {
+        font-size: 13px !important;
+        line-height: 1.4 !important;
+    }
+    [data-testid="stAlert"] {
+        padding-top: 6px !important;
+        padding-bottom: 6px !important;
     }
 
     /* 上级评分页：更紧凑的分隔线与列表行 */
@@ -376,28 +606,255 @@ def main_app():
         text-overflow: ellipsis;
         white-space: nowrap;
     }
-    /* 下属名单操作按钮：小巧精致，颜色与状态列一致（标记列与按钮列相邻，用 + 精确匹配） */
-    div:has(.xqps-btn-remind) + div button,
-    div:has(.xqps-btn-view) + div button,
-    div:has(.xqps-btn-evaluate) + div button {
+    /* 搜索/筛选：全局统一小字号（强制命中） */
+    .stApp [data-baseweb="input"] input {
+        font-size: 12px !important;
+        line-height: 1.25 !important;
+    }
+    .stApp [data-baseweb="select"] * {
+        font-size: 12px !important;
+        line-height: 1.25 !important;
+    }
+    .stApp [data-baseweb="popover"] * {
+        font-size: 12px !important;
+        line-height: 1.25 !important;
+    }
+    /* 综合调整筛选行：输入框和下拉文案居中 */
+    input[aria-label="搜索工号、姓名"] {
+        text-align: center !important;
+        height: 40px !important;
+        font-size: 11px !important;
+        font-weight: 500 !important;
+    }
+    input[aria-label="搜索工号、姓名"]::placeholder {
+        font-size: 11px !important;
+    }
+    div[data-baseweb="select"]:has(input[aria-label="部门"]) * ,
+    div[data-baseweb="select"]:has(input[aria-label="状态"]) * ,
+    div[data-baseweb="select"]:has(input[aria-label="考核等级"]) * {
+        text-align: center !important;
+        font-size: 11px !important;
+    }
+    /* 兼容不同DOM：确保筛选框已选文字和输入文字都与左侧搜索框一致 */
+    div[data-baseweb="select"]:has(input[aria-label="部门"]),
+    div[data-baseweb="select"]:has(input[aria-label="状态"]),
+    div[data-baseweb="select"]:has(input[aria-label="考核等级"]) {
+        font-size: 11px !important;
+    }
+    div[data-baseweb="select"]:has(input[aria-label="部门"]) > div,
+    div[data-baseweb="select"]:has(input[aria-label="状态"]) > div,
+    div[data-baseweb="select"]:has(input[aria-label="考核等级"]) > div,
+    div[data-baseweb="select"]:has(input[aria-label="部门"]) span,
+    div[data-baseweb="select"]:has(input[aria-label="状态"]) span,
+    div[data-baseweb="select"]:has(input[aria-label="考核等级"]) span {
+        font-size: 11px !important;
+        line-height: 1.25 !important;
+    }
+    div[data-baseweb="select"]:has(input[aria-label="部门"]) > div,
+    div[data-baseweb="select"]:has(input[aria-label="状态"]) > div,
+    div[data-baseweb="select"]:has(input[aria-label="考核等级"]) > div {
+        min-height: 40px !important;
+    }
+    /* 下拉候选项字体统一缩小 */
+    div[role="listbox"] div[role="option"] {
+        font-size: 11px !important;
+        line-height: 1.3 !important;
+    }
+    /* 筛选框已选值/输入值最终强制（覆盖 baseweb 默认） */
+    .stApp div[data-baseweb="select"] > div,
+    .stApp div[data-baseweb="select"] input {
+        font-size: 11px !important;
+        font-weight: 500 !important;
+    }
+    /* 综合调整中的等级下拉高亮蓝 */
+    div.element-container:has(.adjust-grade-marker) + div.element-container div[data-baseweb="select"] > div,
+    div[data-baseweb="select"]:has(input[aria-label="选择等级"]) > div {
+        border-color: #1E90FF !important;
+        box-shadow: 0 0 0 1px rgba(30, 144, 255, 0.45) !important;
+    }
+    div.element-container:has(.adjust-grade-marker) + div.element-container div[data-baseweb="select"] *,
+    div[data-baseweb="select"]:has(input[aria-label="选择等级"]) * {
+        color: #66b2ff !important;
+    }
+    div.element-container:has(.adjust-grade-marker) + div.element-container div[data-baseweb="select"] {
+        min-width: 84px !important;
+    }
+    /* 员工列表动作按钮规范（限定在 .mgr-sub-list，避免全局 :has 导致卡顿）
+       统一为「填充色块 + 文本」按钮，行内两行信息垂直居中。 */
+    .mgr-sub-list div.element-container:has(.xqps-btn-remind),
+    .mgr-sub-list div.element-container:has(.xqps-btn-view),
+    .mgr-sub-list div.element-container:has(.xqps-btn-evaluate),
+    .mgr-sub-list div.element-container:has(.xqps-btn-adjust) {
+        display: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        height: 0 !important;
+        min-height: 0 !important;
+    }
+    .mgr-sub-list div.element-container:has(.xqps-btn-remind) + div.element-container,
+    .mgr-sub-list div.element-container:has(.xqps-btn-view) + div.element-container,
+    .mgr-sub-list div.element-container:has(.xqps-btn-evaluate) + div.element-container,
+    .mgr-sub-list div.element-container:has(.xqps-btn-adjust) + div.element-container {
+        margin-top: 0 !important;
+        padding-top: 0 !important;
+        margin-bottom: 0 !important;
+        padding-bottom: 0 !important;
+        min-height: 56px !important;
+        height: 56px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+    .mgr-sub-list div.element-container:has(.xqps-btn-remind) + div.element-container button,
+    .mgr-sub-list div.element-container:has(.xqps-btn-view) + div.element-container button,
+    .mgr-sub-list div.element-container:has(.xqps-btn-evaluate) + div.element-container button,
+    .mgr-sub-list div.element-container:has(.xqps-btn-adjust) + div.element-container button,
+    div.element-container:has(.xqps-btn-collapse) + div.element-container button {
         font-size: 13px !important;
-        min-height: 24px !important;
-        height: 24px !important;
-        padding: 3px 10px !important;
-        border-radius: 10px !important;
+        font-weight: 500 !important;
+        line-height: 1.2 !important;
+        min-height: 32px !important;
+        height: 32px !important;
+        padding: 4px 14px !important;
+        border-radius: 8px !important;
         border: none !important;
+        box-shadow: none !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        margin: 0 !important;
+        vertical-align: middle !important;
     }
-    div:has(.xqps-btn-remind) + div button {
-        background: #FFA500 !important;
+    .mgr-sub-list div.element-container:has(.xqps-btn-remind) + div.element-container button {
+        background: #FFA726 !important;
         color: #1a1a1a !important;
     }
-    div:has(.xqps-btn-view) + div button {
-        background: #00e676 !important;
-        color: #1a1a1a !important;
+    .mgr-sub-list div.element-container:has(.xqps-btn-view) + div.element-container button,
+    div.element-container:has(.xqps-btn-collapse) + div.element-container button {
+        background: #42A5F5 !important;
+        color: #ffffff !important;
     }
-    div:has(.xqps-btn-evaluate) + div button {
-        background: #1E90FF !important;
-        color: white !important;
+    .mgr-sub-list div.element-container:has(.xqps-btn-evaluate) + div.element-container button {
+        background: #26A69A !important;
+        color: #ffffff !important;
+    }
+    .mgr-sub-list div.element-container:has(.xqps-btn-adjust) + div.element-container button {
+        background: #5C6BC0 !important;
+        color: #ffffff !important;
+    }
+    /* 统一按钮容器间距，避免刷新后行高抖动 */
+    .mgr-sub-list div[data-testid="stButton"] {
+        margin: 0 !important;
+    }
+    .mgr-sub-list div[data-testid="stButton"] > button {
+        margin: 0 !important;
+        align-self: center !important;
+    }
+    .mgr-sub-list div.element-container {
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+    }
+    .mgr-sub-list [data-testid="stMarkdownContainer"] p {
+        margin: 0 !important;
+    }
+    /* 隐藏综合调整按钮路标 */
+    div.element-container:has(.dept-draft-marker),
+    div.element-container:has(.vp-draft-marker),
+    div.element-container:has(.dept-confirm-marker),
+    div.element-container:has(.vp-confirm-marker) {
+        display: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        min-height: 0 !important;
+        height: 0 !important;
+    }
+    /* 综合调整：行内暂存按钮，统一为小号填充文本按钮（两行信息居中对齐）
+       同时兼容「同容器」和「相邻容器」两种 DOM 结构，避免颜色缺失。 */
+    div.element-container:has(.dept-draft-marker) button,
+    div.element-container:has(.vp-draft-marker) button,
+    div.element-container:has(.dept-draft-marker) + div.element-container button,
+    div.element-container:has(.vp-draft-marker) + div.element-container button {
+        background: #42A5F5 !important;
+        background-color: #42A5F5 !important;
+        color: #ffffff !important;
+        border: none !important;
+        box-shadow: none !important;
+        min-height: 32px !important;
+        height: 32px !important;
+        padding: 4px 16px !important;
+        border-radius: 8px !important;
+        margin: 0 !important;
+        font-size: 13px !important;
+        font-weight: 500 !important;
+        line-height: 1.2 !important;
+        box-sizing: border-box !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+    div.element-container:has(.dept-draft-marker) + div.element-container,
+    div.element-container:has(.vp-draft-marker) + div.element-container {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        min-height: 56px !important;
+        height: 56px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    div.element-container:has(.dept-draft-marker) + div.element-container button:hover,
+    div.element-container:has(.vp-draft-marker) + div.element-container button:hover {
+        color: #ffffff !important;
+    }
+    /* 综合调整：确认本次调整（红色最终确认样式，去边框/发光） */
+    div.element-container:has(.dept-confirm-marker) + div.element-container button,
+    div.element-container:has(.vp-confirm-marker) + div.element-container button {
+        background: #e53935 !important;
+        color: #ffffff !important;
+        border: none !important;
+        box-shadow: none !important;
+        min-height: 34px !important;
+        height: 34px !important;
+        border-radius: 10px !important;
+        font-size: 14px !important;
+        font-weight: 700 !important;
+    }
+    div.element-container:has(.dept-confirm-marker) + div.element-container,
+    div.element-container:has(.vp-confirm-marker) + div.element-container {
+        margin-top: 2px !important;
+        margin-bottom: 6px !important;
+    }
+    div.element-container:has(.dept-confirm-marker) + div.element-container button:hover,
+    div.element-container:has(.vp-confirm-marker) + div.element-container button:hover {
+        background: #d32f2f !important;
+        border-color: #ef5350 !important;
+    }
+    /* 综合调整操作列：仅图标、无边框、无底色（精准命中相邻按钮容器） */
+    div.element-container:has(.dept-icon-save) + div.element-container button,
+    div.element-container:has(.dept-icon-submit) + div.element-container button,
+    div.element-container:has(.vp-icon-save) + div.element-container button,
+    div.element-container:has(.vp-icon-submit) + div.element-container button {
+        border: none !important;
+        border-color: transparent !important;
+        background: transparent !important;
+        background-color: transparent !important;
+        box-shadow: none !important;
+        min-height: 20px !important;
+        height: 20px !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        font-size: 18px !important;
+        line-height: 1 !important;
+    }
+    div.element-container:has(.dept-icon-save) + div.element-container button:hover,
+    div.element-container:has(.dept-icon-submit) + div.element-container button:hover,
+    div.element-container:has(.vp-icon-save) + div.element-container button:hover,
+    div.element-container:has(.vp-icon-submit) + div.element-container button:hover {
+        border: none !important;
+        background: transparent !important;
+        box-shadow: none !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -418,12 +875,60 @@ def main_app():
             return str(txt) if txt else str(val)
         return str(val)
 
+    def normalize_dept_text(val):
+        raw = extract_text(val, "").strip()
+        if raw in ["", "未获取", "-", "--", "—"]:
+            return ""
+        raw = raw.replace("—", "-").replace("－", "-")
+        parts = [p.strip() for p in raw.split("-") if p.strip() and p.strip() not in ["未获取", "-", "--", "—"]]
+        return "-".join(parts).strip("-").strip()
+
+    def _clean_dept_name(v):
+        """
+        全局部门名称清洗：用于一级部门展示和比较。
+        """
+        t = extract_text(v, "").strip()
+        if t in ["", "未获取", "-", "--", "—"]:
+            return ""
+        t = t.replace("—", "-").replace("－", "-")
+        parts = [p.strip() for p in t.split("-") if p.strip() and p.strip() not in ["-", "--", "—", "未获取"]]
+        return "-".join(parts).strip("-").strip()
+
+    def build_dept_chain(fields_obj):
+        d2 = normalize_dept_text(fields_obj.get("二级部门"))
+        d3 = normalize_dept_text(fields_obj.get("三级部门"))
+        d4 = normalize_dept_text(fields_obj.get("四级部门"))
+        return "-".join([d for d in [d2, d3, d4] if d]).strip("-").strip()
+
+    def action_button(action_type, label, key, use_container_width=True, disabled=False, on_click=None):
+        """
+        统一的文本按钮：填充色块 + 文字，配合 CSS 控制颜色与对齐。
+        action_type 仅用于打上标记 class，具体样式在全局 CSS 中统一控制。
+        """
+        st.markdown(
+            f"<div class='xqps-btn-{action_type}' style='width:0;height:0;overflow:hidden;'></div>",
+            unsafe_allow_html=True,
+        )
+        return st.button(
+            label,
+            key=key,
+            use_container_width=use_container_width,
+            disabled=disabled,
+            on_click=on_click,
+        )
+
     # 1. 登录与获取飞书档案
     if not st.session_state.feishu_record_id and st.session_state.feishu_record_id != "NOT_FOUND":
         with st.spinner("正在同步您的飞书档案数据..."):
             current_open_id = st.session_state.user_info.get("open_id") or st.session_state.user_info.get("id")
             try:
-                record = get_record_by_openid_safely(APP_TOKEN, TABLE_ID, current_open_id)
+                record = get_record_by_openid_safely(
+                    APP_TOKEN,
+                    TABLE_ID,
+                    current_open_id,
+                    fallback_name=st.session_state.user_info.get("name", ""),
+                    fallback_emp_id=st.session_state.user_info.get("emp_id", ""),
+                )
                 if isinstance(record, dict):
                     fields = record.get("fields", {})
                     st.session_state.feishu_record = fields
@@ -481,6 +986,12 @@ def main_app():
     user_name = st.session_state.user_info.get('name', '未知用户')
     emp_id = extract_text(fields.get('工号') or fields.get('员工工号'), st.session_state.user_info.get('emp_id', '未绑定'))
     job_title = extract_text(fields.get('岗位') or fields.get('职位'), st.session_state.user_info.get('job_title', '未分配'))
+    current_cycle = (
+        extract_text(fields.get("绩效考核周期"), "").strip()
+        or extract_text(fields.get("考核周期"), "").strip()
+        or extract_text(fields.get("本次绩效考核周期"), "").strip()
+        or "2026上半年"
+    )
     dept_parts = [d for d in [extract_text(fields.get(f'{k}级部门'), "") for k in ["一", "二", "三", "四"]] if d and d != "未获取"]
     department = "-".join(dept_parts) if dept_parts else "未获取"
     manager = extract_text(fields.get('直接评价人') or fields.get('评价人'))
@@ -522,9 +1033,13 @@ def main_app():
     # 3. 若为管理者则拉取下属数据
     real_subordinates = []
     my_all_subs = []
+    all_records_snapshot = []
+    is_dept_head = False
+    is_vp = False
     if st.session_state.role == "管理者" and is_submitted:
         with st.spinner("正在拉取团队数据..."):
             all_records = fetch_all_records_safely(APP_TOKEN, TABLE_ID)
+            all_records_snapshot = all_records
             for record in all_records:
                 rec_fields = record.get("fields", {})
                 rec_manager = extract_text(rec_fields.get("直接评价人") or rec_fields.get("评价人"))
@@ -532,6 +1047,16 @@ def main_app():
                     my_all_subs.append(record)
                     if extract_text(rec_fields.get("自评是否提交")).strip() == "是":
                         real_subordinates.append(record)
+
+            # 识别当前用户是否为一级部门负责人 / 分管高管
+            for record in all_records:
+                rec_fields = record.get("fields", {})
+                dept_head_str = extract_text(rec_fields.get("一级部门负责人"), "").strip()
+                vp_str = extract_text(rec_fields.get("分管高管") or rec_fields.get("高管"), "").strip()
+                if user_name and user_name in dept_head_str:
+                    is_dept_head = True
+                if user_name and user_name in vp_str:
+                    is_vp = True
 
     # 4. 侧边栏渲染 (从上到下严格顺序)
     st.sidebar.markdown(f"### 👋 欢迎 {user_name}（{emp_id}）！")
@@ -541,7 +1066,7 @@ def main_app():
     st.sidebar.markdown("---")
     
     st.sidebar.markdown("### ℹ️ 员工信息")
-    st.sidebar.caption("绩效考核周期: 2026上半年")
+    st.sidebar.caption(f"绩效考核周期: {current_cycle}")
     st.sidebar.caption(f"您的部门: {department}")
     st.sidebar.caption(f"直接评价人: {manager} | 分管高管: {vp}")
     st.sidebar.markdown("---")
@@ -585,8 +1110,10 @@ def main_app():
             mgr_lead_unscored = has_leadership and (val_lead == 0.0)
             
             val_comment = st.session_state.get(f"mgr_comment_{sub_id_str}")
-            if val_comment is None: val_comment = extract_text(sub_f.get("考核评语", ""))
-            mgr_comment_empty = len(val_comment.strip()) == 0
+            if val_comment is None:
+                val_comment = extract_text(sub_f.get("考核评语", ""), "")
+            val_comment = str(val_comment).strip()
+            mgr_comment_empty = (len(val_comment) == 0) or (val_comment in ["0", "未获取", "None"])
             
             step2_can_submit = not (mgr_work_unscored or mgr_comp_unscored or mgr_lead_unscored or mgr_comment_empty)
             
@@ -663,18 +1190,27 @@ def main_app():
         st.rerun()
 
     # 5. 主体内容区渲染 (动态权限版)
+    can_adjust_tab = (is_dept_head or is_vp)
     if st.session_state.role == "管理者":
-        tab_list = ["📝 员工自评", "👥 上级评分", "⚖️ 综合调整", "✅ 公司审批", "📂 历史信息"]
+        tab_list = ["📝 员工自评", "👥 上级评分"]
+        if can_adjust_tab:
+            tab_list.append("⚖️ 综合调整")
+        tab_list.append("📊 视图与报表")  # 原「公司审批」，先作为视图与报表占位
+        tab_list.append("📂 历史信息")
     else:
         # 员工个人只看两个标签
         tab_list = ["📝 员工自评", "📂 历史信息"]
 
     tabs = st.tabs(tab_list)
+    idx_self = 0
+    idx_mgr = 1 if st.session_state.role == "管理者" else 0
+    idx_adjust = 2 if (st.session_state.role == "管理者" and can_adjust_tab) else None
+    idx_reports = 3 if (st.session_state.role == "管理者" and can_adjust_tab) else (2 if st.session_state.role == "管理者" else None)
 
     # ==========================================
     # 🟢 模块 1：员工自评 (索引 0)
     # ==========================================
-    with tabs[0]:
+    with tabs[idx_self]:
         if "ui_comp_summary" not in st.session_state:
             st.session_state["ui_comp_summary"] = extract_text(fields.get("通用能力总结", ""))
         if "ui_comp_score" not in st.session_state:
@@ -687,17 +1223,24 @@ def main_app():
             l_score = fields.get("领导力自评得分", 0.0)
             st.session_state["ui_lead_score"] = float(l_score) if l_score else 0.0
         
-        st.header("🎯 当前绩效目标设定与自评")
+        st.markdown("<div class='hero-title'>🎯 当前绩效目标设定与自评</div>", unsafe_allow_html=True)
         if is_submitted:
             st.success("🔒 您的自评已提交，当前表单不可修改。")
         
-        st.markdown("### 💼 工作模块")
+        st.markdown("<div class='module-title'>💼 工作模块</div>", unsafe_allow_html=True)
         st.info(f"💡 提示：工作模块总体占比 {target_weight}% (各目标权重之和必须等于 {target_weight}%)")
-        
+        hint_placeholder = "如需更大操作区域，可拖动文本框右下角放大区域。"
+
         for i in range(1, st.session_state.goal_count + 1):
             col_left, col_right = st.columns([3, 1])
             with col_left:
-                st.text_area(f"工作目标{i}及总结", height=110, disabled=is_submitted, key=f"obj_summary_{i}")
+                st.text_area(
+                    f"工作目标{i}及总结",
+                    height=110,
+                    disabled=is_submitted,
+                    key=f"obj_summary_{i}",
+                    placeholder=hint_placeholder,
+                )
             with col_right:
                 st.number_input(f"工作目标{i}权重(%)", min_value=0, max_value=100, step=5, disabled=is_submitted, key=f"obj_weight_{i}")
                 st.selectbox(f"工作目标{i}自评得分", options=SCORE_OPTIONS, disabled=is_submitted, key=f"obj_score_{i}")
@@ -719,23 +1262,39 @@ def main_app():
                         st.session_state.goal_count -= 1
                         st.rerun()
 
-        if not is_submitted:
-            st.caption("提示：可拖动每个文本框右下角放大编辑区域，便于撰写长文。")
-
-        st.markdown("### 🧠 能力模块")
+        st.markdown("<div class='module-title'>🧠 能力模块</div>", unsafe_allow_html=True)
         if st.session_state.role == "员工":
             st.info("💡 提示：通用能力占比 20%")
             col_comp_left, col_comp_right = st.columns([3, 1])
-            with col_comp_left: st.text_area("结合考核期工作实际情况，从「思考、行动、写作、成长」四个维度总结", height=110, disabled=is_submitted, key="comp_summary")
+            with col_comp_left:
+                st.text_area(
+                    "结合考核期工作实际情况，从「思考、行动、写作、成长」四个维度总结",
+                    height=110,
+                    disabled=is_submitted,
+                    key="comp_summary",
+                    placeholder=hint_placeholder,
+                )
             with col_comp_right: st.selectbox("通用能力自评得分", options=SCORE_OPTIONS, disabled=is_submitted, key="comp_score")
         elif st.session_state.role == "管理者":
             st.info("💡 提示：通用能力占比 20%、领导力占比 20%")
             col_cap_left, col_cap_right = st.columns(2)
             with col_cap_left:
-                st.text_area("结合考核期工作实际情况，从「思考、行动、写作、成长」四个维度总结", height=110, disabled=is_submitted, key="comp_summary")
+                st.text_area(
+                    "结合考核期工作实际情况，从「思考、行动、写作、成长」四个维度总结",
+                    height=110,
+                    disabled=is_submitted,
+                    key="comp_summary",
+                    placeholder=hint_placeholder,
+                )
                 st.selectbox("通用能力自评得分", options=SCORE_OPTIONS, disabled=is_submitted, key="comp_score")
             with col_cap_right:
-                st.text_area("请结合考核周期工作实际情况，从「领导力」维度进行阐述与总结", height=110, disabled=is_submitted, key="lead_summary")
+                st.text_area(
+                    "请结合考核周期工作实际情况，从「领导力」维度进行阐述与总结",
+                    height=110,
+                    disabled=is_submitted,
+                    key="lead_summary",
+                    placeholder=hint_placeholder,
+                )
                 st.selectbox("领导力自评得分", options=SCORE_OPTIONS, disabled=is_submitted, key="lead_score")
                 
         if not is_submitted:
@@ -780,13 +1339,13 @@ def main_app():
                             st.success("✅ 草稿已成功保存至飞书！")
                         else: st.error(f"❌ 暂存失败！{error_msg}")
                         
-            st.error("💡 提示：点击「确认提交」即意味着本次自评结束，不可再修改。")        
+            st.info("💡 提示：点击「确认提交」即意味着本次自评结束，不可再修改。")        
 
     # ==========================================
     # 🟢 模块 2：管理者专属权限 
     # ==========================================
     if st.session_state.role == "管理者":
-        with tabs[1]:
+        with tabs[idx_mgr]:
             if is_submitted:
                 # --- 1. 下属评估进展看板 ---
                 total_subs = len(my_all_subs)
@@ -811,23 +1370,9 @@ def main_app():
                         
                 unrated_subs = submitted_subs - rated_subs - drafted_subs
                 
-                grade_counts = Counter(grade_list)
-                sort_order = {"S": 1, "A": 2, "B+": 3, "B": 4, "B-": 5, "C": 6}
-                sorted_grades = sorted(grade_counts.items(), key=lambda x: sort_order.get(x[0], 99))
-                grade_counts_map = {k: v for k, v in sorted_grades if k and k != "未获取"}
-                total_grades = sum(grade_counts_map.values())
-                if total_grades == 0:
-                    dist_str = "暂无评分数据"
-                else:
-                    order_keys = ["S", "A", "B+", "B", "B-", "C"]
-                    parts = []
-                    for k in order_keys:
-                        cnt = grade_counts_map.get(k, 0)
-                        parts.append(f"{k}: {cnt}人")
-                    dist_str = " | ".join(parts)
 
                 # 模块 1：下属评估进展（单列）
-                st.markdown("### 👥 下属评估进展")
+                st.markdown("<div class='module-title'>👥 下属评估进展</div>", unsafe_allow_html=True)
                 st.markdown(
                     f"""
                     <div style="font-size: 13px; color: #E0E0E0; margin-bottom: 10px; padding: 10px; background-color: rgba(255,255,255,0.02); border-radius: 6px; border: 1px solid #444;">
@@ -842,85 +1387,93 @@ def main_app():
                     """,
                     unsafe_allow_html=True,
                 )
-
-                # 模块 2：团队等级分布（单列）
-                st.markdown("### 📊 团队等级分布")
-                if dist_str == "暂无评分数据":
-                    st.markdown(
-                        f"""
-                        <div style="font-size: 13px; color: #E0E0E0; padding: 10px; background-color: rgba(255,255,255,0.02); border-radius: 6px; border: 1px solid #444; text-align: center;">
-                            {dist_str}
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    # 按 S/A/B+/B/B-/C 分散居中对齐，与进展块同风格，数字彩色显示
-                    order_keys = ["S", "A", "B+", "B", "B-", "C"]
-                    grade_colors = {"S": "#00e676", "A": "#1E90FF", "B+": "#1E90FF", "B": "#b0b0b0", "B-": "#FFA500", "C": "#ff5252"}
-                    parts_html = []
-                    for k in order_keys:
-                        cnt = grade_counts_map.get(k, 0)
-                        c = grade_colors.get(k, "#1E90FF")
-                        parts_html.append(f"<span><b>{k}：</b><span style='color:{c};'>{cnt}</span> 人</span>")
-                    st.markdown(
-                        f"""
-                        <div style="font-size: 13px; color: #E0E0E0; margin-bottom: 10px; padding: 10px; background-color: rgba(255,255,255,0.02); border-radius: 6px; border: 1px solid #444;">
-                            <div style="display:flex; justify-content:center; gap:18px; flex-wrap:wrap;">
-                                {"".join(parts_html)}
-                            </div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-
                 st.markdown("---")
 
                 # 模块 3：下属评估名单（单列容器，内部用列展示字段）
-                st.markdown("### 👇 下属评估名单")
+                st.markdown("<div class='module-title'>👇 下属评估名单</div>", unsafe_allow_html=True)
                 if not my_all_subs:
-                    st.info("当前暂无已提交自评的下属。")
+                    st.info("💡 提示：当前暂无已提交自评的下属。")
                 else:
-                    # 搜索框：按工号、姓名、提交状态、考核等级过滤
-                    search_term = st.text_input(
-                        "搜索",
-                        placeholder="🔎 搜索工号、姓名、状态（未自评/待评价/已完成）或考核等级（S/A/B+/B/B-/C）",
-                        key="sub_list_search",
+                    # 顶部筛选：与综合调整统一（工号姓名 / 部门 / 状态 / 考核等级）
+                    f1, f2, f3, f4 = st.columns(4, gap="small")
+                    q_name_emp = f1.text_input(
+                        "搜索工号、姓名",
+                        placeholder="🔎 搜索工号、姓名",
+                        key="mgr_filter_name_emp",
                         label_visibility="collapsed",
                     )
-                    search_lower = search_term.strip().lower()
-                    filtered_subs = my_all_subs
-                    if search_lower:
-                        filtered_subs = []
-                        for s in my_all_subs:
-                            f = s.get("fields", {})
-                            n = extract_text(f.get("姓名"), "").lower()
-                            e = extract_text(f.get("工号") or f.get("员工工号"), "").lower()
-                            # 状态匹配
-                            s_submitted = extract_text(f.get("自评是否提交")).strip() == "是"
-                            s_mgr_done = extract_text(f.get("上级评价是否完成")).strip() == "是"
-                            if not s_submitted:
-                                status_str = "未自评"
-                            elif s_mgr_done:
-                                status_str = "已完成"
-                            else:
-                                status_str = "待评价"
-                            # 考核等级匹配
-                            mgr_grade = extract_text(f.get("考核结果", "")).strip().lower()
-                            if search_lower in n or search_lower in e or search_lower in status_str or search_lower == mgr_grade:
-                                filtered_subs.append(s)
-                    if not filtered_subs and search_lower:
+                    dept_options = set()
+                    for s in my_all_subs:
+                        ff = s.get("fields", {})
+                        _chain = build_dept_chain(ff) or normalize_dept_text(ff.get("一级部门"))
+                        if _chain:
+                            dept_options.add(_chain)
+                    dept_options = sorted(dept_options)
+                    q_dept = f2.selectbox(
+                        "部门",
+                        ["全部部门"] + dept_options,
+                        key="mgr_filter_dept",
+                        label_visibility="collapsed",
+                    )
+                    q_status = f3.selectbox(
+                        "状态",
+                        ["全部状态", "未自评", "待评价", "暂存", "已完成"],
+                        key="mgr_filter_status",
+                        label_visibility="collapsed",
+                    )
+                    q_mgr_grade = f4.selectbox(
+                        "考核等级",
+                        ["全部考核等级"] + GRADE_OPTIONS + ["-"],
+                        key="mgr_filter_grade",
+                        label_visibility="collapsed",
+                    )
+                    sort_order = {"S": 1, "A": 2, "B+": 3, "B": 4, "B-": 5, "C": 6}
+                    q1 = q_name_emp.strip().lower()
+                    q2 = q_dept.strip().lower()
+                    filtered_subs = []
+                    for s in my_all_subs:
+                        f = s.get("fields", {})
+                        n = extract_text(f.get("姓名"), "").strip()
+                        e = extract_text(f.get("工号") or f.get("员工工号"), "").strip()
+                        dept_chain = build_dept_chain(f) or normalize_dept_text(f.get("一级部门")) or "未分配部门"
+                        s_submitted = extract_text(f.get("自评是否提交")).strip() == "是"
+                        s_mgr_done = extract_text(f.get("上级评价是否完成")).strip() == "是"
+                        current_grade_filter = extract_text(f.get("考核结果", "-")).strip() or "-"
+                        is_draft_filter = (not s_mgr_done) and (current_grade_filter in GRADE_OPTIONS)
+                        if not s_submitted:
+                            status_str = "未自评"
+                        elif s_mgr_done:
+                            status_str = "已完成"
+                        elif is_draft_filter:
+                            status_str = "暂存"
+                        else:
+                            status_str = "待评价"
+
+                        if q1 and (q1 not in n.lower() and q1 not in e.lower()):
+                            continue
+                        if q_dept != "全部部门" and (q2 not in dept_chain.lower()):
+                            continue
+                        if q_status != "全部状态" and q_status != status_str:
+                            continue
+                        if q_mgr_grade != "全部考核等级":
+                            has_grade = current_grade_filter in GRADE_OPTIONS
+                            if q_mgr_grade == "-" and has_grade:
+                                continue
+                            if q_mgr_grade in GRADE_OPTIONS and current_grade_filter != q_mgr_grade:
+                                continue
+                        filtered_subs.append(s)
+                    has_filter = bool(q1) or q_dept != "全部部门" or q_status != "全部状态" or q_mgr_grade != "全部考核等级"
+                    if not filtered_subs and has_filter:
                         st.caption("未找到匹配的下属")
                     st.markdown("<div class='mgr-sub-list'>", unsafe_allow_html=True)
-                    # 表头：姓名 / 工号 / 岗位 / 自评等级 / 考核等级 / 状态 / 操作
-                    h1, h2, h3, h4, h5, h6, h7 = st.columns(7)
-                    h1.markdown("<div class='sub-list-head'>下属姓名</div>", unsafe_allow_html=True)
-                    h2.markdown("<div class='sub-list-head'>工号</div>", unsafe_allow_html=True)
-                    h3.markdown("<div class='sub-list-head'>岗位</div>", unsafe_allow_html=True)
-                    h4.markdown("<div class='sub-list-head'>自评等级</div>", unsafe_allow_html=True)
-                    h5.markdown("<div class='sub-list-head'>考核等级</div>", unsafe_allow_html=True)
-                    h6.markdown("<div class='sub-list-head'>状态</div>", unsafe_allow_html=True)
-                    h7.markdown("<div class='sub-list-head'>操作</div>", unsafe_allow_html=True)
+                    # 表头：与综合调整风格统一（多行展示）
+                    h1, h2, h3, h4, h5, h6 = st.columns([2.2, 3.2, 1.2, 1.2, 1.2, 2.0])
+                    h1.markdown("<div class='sub-list-head'>姓名（工号）</div>", unsafe_allow_html=True)
+                    h2.markdown("<div class='sub-list-head'>子部门/岗位</div>", unsafe_allow_html=True)
+                    h3.markdown("<div class='sub-list-head'>自评等级</div>", unsafe_allow_html=True)
+                    h4.markdown("<div class='sub-list-head'>考核等级</div>", unsafe_allow_html=True)
+                    h5.markdown("<div class='sub-list-head'>状态</div>", unsafe_allow_html=True)
+                    h6.markdown("<div class='sub-list-head'>操作</div>", unsafe_allow_html=True)
                     st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
 
                     for sub in filtered_subs:
@@ -943,7 +1496,8 @@ def main_app():
                         if grade_diff >= 2:
                             warning_icon = "<span title='请注意：你的评分与员工自评分差异较大' style='cursor:help; font-size:12px; margin-left:2px;'>ⓘ</span>"
 
-                        # 状态与按钮类型
+                        # 状态与按钮类型：区分「未自评 / 暂存 / 已完成 / 待评价」
+                        is_draft = (not is_mgr_done) and (current_grade and current_grade not in ["", "未获取", "-"])
                         if not is_self_submitted:
                             status_html = "<span style='color:#FFA500;'>未自评</span>"
                             action_type = "remind"
@@ -951,39 +1505,57 @@ def main_app():
                             color = "#00e676"
                             status_html = f"<span style='color:{color}; font-weight:800;'>已完成{warning_icon}</span>"
                             action_type = "view"
+                        elif is_draft:
+                            # 已有考核等级但未提交，视为暂存
+                            status_html = f"<span style='color:#FFA500;'>暂存{warning_icon}</span>"
+                            action_type = "adjust"
                         else:
                             status_html = "<span style='color:#1E90FF;'>待评价</span>"
                             action_type = "evaluate"
 
                         # 自评等级：未自评显示 -，已自评直接显示等级
                         disp_grade = "-" if not is_self_submitted else (self_grade if self_grade not in ["", "未获取", "None"] else "-")
-                        # 考核等级（上级评分后的结果）
-                        disp_mgr_grade = current_grade if current_grade and current_grade not in ["", "未获取", "-"] else "-"
+                        # 考核等级：已完成 ✅，暂存 💾，否则 -
+                        if current_grade and current_grade not in ["", "未获取", "-"]:
+                            if is_mgr_done:
+                                disp_mgr_grade = f"✅ {current_grade}"
+                            elif is_draft:
+                                disp_mgr_grade = f"💾 {current_grade}"
+                            else:
+                                disp_mgr_grade = current_grade
+                        else:
+                            disp_mgr_grade = "-"
 
-                        c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
-                        c1.markdown(f"<div class='sub-list-cell' style='color:#E0E0E0;'>📄 {s_name}</div>", unsafe_allow_html=True)
-                        c2.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0;'>{s_emp_id}</div>", unsafe_allow_html=True)
-                        c3.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0;' title='{s_job}'>{s_job}</div>", unsafe_allow_html=True)
-                        c4.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0;'>{disp_grade}</div>", unsafe_allow_html=True)
-                        c5.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0;'>{disp_mgr_grade}</div>", unsafe_allow_html=True)
-                        c6.markdown(f"<div class='sub-list-cell'>{status_html}</div>", unsafe_allow_html=True)
+                        dept_chain = build_dept_chain(sub_f) or normalize_dept_text(sub_f.get("一级部门")) or "未分配部门"
+                        c1, c2, c3, c4, c5, c6 = st.columns([2.2, 3.2, 1.2, 1.2, 1.2, 2.0], vertical_alignment="center")
+                        c1.markdown(
+                            f"<div class='sub-list-cell' style='color:#E0E0E0; white-space:normal;'><b>{s_name}</b><br>（{s_emp_id}）</div>",
+                            unsafe_allow_html=True,
+                        )
+                        c2.markdown(
+                            f"<div class='sub-list-cell' style='color:#b0b0b0; white-space:normal;' title='{dept_chain} | {s_job}'>{dept_chain}<br>{s_job}</div>",
+                            unsafe_allow_html=True,
+                        )
+                        c3.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0;'>{disp_grade}</div>", unsafe_allow_html=True)
+                        c4.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0;'>{disp_mgr_grade}</div>", unsafe_allow_html=True)
+                        c5.markdown(f"<div class='sub-list-cell'>{status_html}</div>", unsafe_allow_html=True)
 
-                        with c7:
-                            col_m, col_b = st.columns([0.001, 0.999])
-                            with col_m:
-                                st.markdown(f"<div class='xqps-btn-{action_type}' style='width:0;height:0;overflow:hidden;'></div>", unsafe_allow_html=True)
-                            with col_b:
-                                if action_type == "remind":
-                                    if st.button("提醒", key=f"btn_remind_{s_id}", use_container_width=True):
-                                        st.toast("飞书机器人提醒功能开发中，敬请期待", icon="🔔")
-                                elif action_type == "view":
-                                    if st.button("查看", key=f"btn_view_{s_id}", use_container_width=True):
-                                        jump_to_subordinate(s_id)
-                                        st.rerun()
-                                else:
-                                    if st.button("去评价", key=f"btn_jump_{s_id}", use_container_width=True):
-                                        jump_to_subordinate(s_id)
-                                        st.rerun()
+                        with c6:
+                            if action_type == "remind":
+                                if action_button("remind", "提醒", key=f"btn_remind_{s_id}"):
+                                    st.toast("飞书机器人提醒功能开发中，敬请期待", icon="🔔")
+                            elif action_type == "view":
+                                if action_button("view", "查看", key=f"btn_view_{s_id}"):
+                                    jump_to_subordinate(s_id)
+                                    st.rerun()
+                            elif action_type == "adjust":
+                                if action_button("adjust", "去调整", key=f"btn_adjust_{s_id}"):
+                                    jump_to_subordinate(s_id)
+                                    st.rerun()
+                            else:
+                                if action_button("evaluate", "去评价", key=f"btn_jump_{s_id}"):
+                                    jump_to_subordinate(s_id)
+                                    st.rerun()
                         st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
 
                     st.markdown("</div>", unsafe_allow_html=True)
@@ -1006,7 +1578,7 @@ def main_app():
                         st.markdown("---")
                         col_head1, col_head2 = st.columns([3, 1])
                         with col_head1:
-                            st.markdown(f"### 📝 正在评估：{disp_name}")
+                            st.markdown(f"<div class='module-title'>📝 正在评估：{disp_name}</div>", unsafe_allow_html=True)
                             st.markdown(
                                 f"""
                                 <div style='font-size:14px; color:#E0E0E0; margin-top:6px; line-height:1.6;'>
@@ -1020,10 +1592,10 @@ def main_app():
                                 unsafe_allow_html=True,
                             )
                         with col_head2:
-                            st.button("收起面板", on_click=return_to_self, use_container_width=True)
+                            action_button("collapse", "收起面板", key=f"btn_collapse_panel_{sub_id_str}", on_click=return_to_self)
                         st.write("")
                         
-                        st.markdown("### 💼 工作模块展示与评分")
+                        st.markdown("<div class='module-title'>💼 工作模块展示与评分</div>", unsafe_allow_html=True)
                         sub_weight_sum = 0
                         
                         sub_goal_count = 3
@@ -1048,11 +1620,11 @@ def main_app():
                         try: work_idx = SCORE_OPTIONS.index(float(saved_work_score))
                         except: work_idx = 0
                         
-                        st.info(f"💡 该下属工作目标总权重为：**{sub_weight_sum}%**")
+                        st.info(f"💡 提示：该下属工作目标总权重为 **{sub_weight_sum}%**")
                         mgr_work_score = st.selectbox("🌟 工作目标整体上级评分", options=SCORE_OPTIONS, index=work_idx, key=f"mgr_work_score_{sub_id_str}")
                         st.markdown("---")
 
-                        st.markdown("### 🧠 能力模块展示与评分")
+                        st.markdown("<div class='module-title'>🧠 通用能力模块展示与评分</div>", unsafe_allow_html=True)
                         sub_comp_text = sub_f.get("通用能力总结", "未填写")
                         sub_comp_score = sub_f.get("通用能力自评得分", 0.0)
                         saved_comp_score = sub_f.get("通用能力上级评分", 0.0)
@@ -1076,16 +1648,13 @@ def main_app():
                             try: lead_idx = SCORE_OPTIONS.index(float(saved_lead_score))
                             except: lead_idx = 0
                             
-                            st.markdown("#### 👑 领导力模块")
+                            st.markdown("<div class='module-title'>👑 领导力模块展示与评分</div>", unsafe_allow_html=True)
                             st.markdown(f"**👑 领导力总结** <span style='font-size:14px; color:#888;'>(自评: {sub_lead_score}分)</span>", unsafe_allow_html=True)
                             st.text_area("隐藏标签", value=sub_lead_text, height=100, disabled=True, key=f"ui_sub_lead_{sub_id_str}", label_visibility="collapsed")
                             st.write("")
                             
                             mgr_lead_score = st.selectbox("🌟 领导力上级评分", options=SCORE_OPTIONS, index=lead_idx, key=f"mgr_lead_score_{sub_id_str}")
                         st.markdown("---")
-
-                        st.caption("提示：如需查看更长文本，可拖动下方各文本框右下角放大区域。")
-                        
                         comp_weight = 20 if has_leadership else (100 - sub_weight_sum)
                         lead_weight = 20 if has_leadership else 0
                         
@@ -1096,10 +1665,14 @@ def main_app():
                         current_total_score = round(current_total_score, 2)
                         current_grade = calculate_grade(current_total_score)
                         
-                        st.markdown(f"### 📈 考核总得分预览：**{current_total_score} 分** ｜ 绩效等级：**{current_grade}**")
+                        st.markdown(
+                            f"<div class='module-title'>📈 考核总得分预览：{current_total_score} 分 ｜ 绩效等级：{current_grade}</div>",
+                            unsafe_allow_html=True,
+                        )
                         st.caption(f"(工作模块权重 {sub_weight_sum}%，能力模块权重 {comp_weight}%)")
                         
-                        saved_comment = extract_text(sub_f.get("考核评语", ""))
+                        saved_comment_raw = extract_text(sub_f.get("考核评语", ""), "").strip()
+                        saved_comment = saved_comment_raw if saved_comment_raw and saved_comment_raw not in ["未获取", "None", "0"] else ""
                         st.text_area("✍️ 考核评语", value=saved_comment, height=100, placeholder="请输入对该下属的整体评价...", key=f"mgr_comment_{sub_id_str}")
                         
                         sub_update_data = {
@@ -1141,23 +1714,906 @@ def main_app():
                                         st.success(f"✅ 草稿已成功保存至飞书！")
                                     else:
                                         st.error(f"❌ 暂存失败：{error_msg}")
-                        st.error("💡 提示：点击「确认提交打分」即意味着对该下属的本次评估结束，不可再修改。")
+                        st.info("💡 提示：点击「确认提交打分」即意味着对该下属的本次评估结束，不可再修改。")
                     else:
                         st.error("未找到对应下属的数据，请返回重试。")
                         st.button("🔙 返回", on_click=return_to_self)
             else:
-                st.info("💡 尚未提交个人自评，暂无法进行下级评估。")
+                st.info("💡 提示：尚未提交个人自评，暂无法进行下级评估。")
 
-            with tabs[2]:
-                st.write("🔧 综合调整功能开发中...")
-            with tabs[3]:
-                st.write("🔧 公司审批功能开发中...")
+        if idx_adjust is not None:
+            with tabs[idx_adjust]:
+                # 根据身份动态决定子 Tab
+                sub_tab_labels = ["一级部门负责人调整"]
+                has_vp_tab = is_vp
+                if has_vp_tab:
+                    sub_tab_labels.append("分管高管调整")
+                sub_tabs = st.tabs(sub_tab_labels)
+
+                # ===== 一级部门负责人调整 =====
+                with sub_tabs[0]:
+                    if not is_dept_head:
+                        st.info("💡 提示：当前您不是任何员工的一级部门负责人，暂无可调整名单。")
+                    else:
+                        all_records = all_records_snapshot or fetch_all_records_safely(APP_TOKEN, TABLE_ID)
+                        dept_head_records = []
+                        for rec in all_records:
+                            f = rec.get("fields", {})
+                            dept_head_str = extract_text(f.get("一级部门负责人") or f.get("部门负责人"), "").strip()
+                            emp_name = extract_text(f.get("姓名"), "").strip()
+                            # 逻辑：该员工在多维表中标记的「一级部门负责人」是当前用户，且不是本人，即纳入本次调整范围
+                            if user_name and user_name in dept_head_str and emp_name != user_name:
+                                dept_head_records.append(rec)
+
+                        total_cnt = len(dept_head_records)
+                        done_cnt = 0
+                        for rec in dept_head_records:
+                            f = rec.get("fields", {})
+                            if extract_text(f.get("一级部门负责人调整完毕", "")).strip() == "是":
+                                done_cnt += 1
+                        pending_cnt = total_cnt - done_cnt
+
+                        st.markdown("<div class='module-title'>📌 一级部门负责人调整进展</div>", unsafe_allow_html=True)
+                        st.markdown(
+                            f"""
+                            <div style="font-size: 14px; color: #E0E0E0; margin-bottom: 10px; padding: 10px; background-color: rgba(255,255,255,0.02); border-radius: 6px; border: 1px solid #444;">
+                                <div style="display:flex; justify-content:center; gap:18px; flex-wrap:wrap;">
+                                    <span><b>覆盖人数：</b><span style="color:#1E90FF;">{total_cnt}</span> 人</span>
+                                    <span><b>已完成调整：</b><span style="color:#00e676;">{done_cnt}</span> 人</span>
+                                    <span><b>待调整：</b><span style="color:#FFA500;">{pending_cnt}</span> 人</span>
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+
+                        st.markdown("<div class='module-title'>👇 待调整名单</div>", unsafe_allow_html=True)
+                        dept_msg_box = st.empty()
+                        if not dept_head_records:
+                            st.info("💡 提示：暂无需您调整的员工。")
+                        else:
+                            # 顶部筛选：工号姓名 / 部门 / 状态 / 考核等级
+                            f1, f2, f3, f4 = st.columns(4, gap="small")
+                            q_name_emp = f1.text_input("搜索工号、姓名", placeholder="🔎 搜索工号、姓名", key="dept_filter_name_emp", label_visibility="collapsed")
+                            # 部门下拉（展示二级-三级-四级部门链路）
+                            dept_options = set()
+                            for rec in dept_head_records:
+                                ff = rec.get("fields", {})
+                                _chain = build_dept_chain(ff)
+                                if _chain:
+                                    dept_options.add(_chain)
+                            dept_options = sorted(dept_options)
+                            q_dept = f2.selectbox(
+                                "部门",
+                                ["全部部门"] + dept_options,
+                                key="dept_filter_dept",
+                                label_visibility="collapsed",
+                            )
+                            q_status = f3.selectbox(
+                                "状态",
+                                ["全部状态", "待上级评分", "待调整", "已完成调整"],
+                                key="dept_filter_status",
+                                label_visibility="collapsed",
+                            )
+                            q_mgr_grade = f4.selectbox(
+                                "考核等级",
+                                ["全部调整等级"] + GRADE_OPTIONS + ["-"],
+                                key="dept_filter_mgr_grade",
+                                label_visibility="collapsed",
+                            )
+
+                            filtered_dept_records = []
+                            q1 = q_name_emp.strip().lower()
+                            q2 = q_dept.strip().lower()
+                            for rec in dept_head_records:
+                                f = rec.get("fields", {})
+                                name = extract_text(f.get("姓名"), "").strip()
+                                emp = extract_text(f.get("工号") or f.get("员工工号"), "").strip()
+                                dept_chain = build_dept_chain(f)
+                                mgr_grade = extract_text(f.get("考核结果", "-")).strip() or "-"
+                                adj_grade = extract_text(f.get("一级部门调整考核结果", "-")).strip() or "-"
+                                done_flag = extract_text(f.get("一级部门负责人调整完毕", "")).strip() == "是"
+                                has_mgr_grade = mgr_grade in GRADE_OPTIONS
+                                has_adj_grade = adj_grade in GRADE_OPTIONS
+                                status = "已完成调整" if done_flag else ("待调整" if has_mgr_grade else "待上级评分")
+
+                                if q1 and (q1 not in name.lower() and q1 not in emp.lower()):
+                                    continue
+                                if q_dept != "全部部门" and (q2 not in dept_chain.lower()):
+                                    continue
+                                if q_status != "全部状态" and q_status != status:
+                                    continue
+                                if q_mgr_grade != "全部调整等级":
+                                    if q_mgr_grade == "-" and has_adj_grade:
+                                        continue
+                                    if q_mgr_grade in GRADE_OPTIONS and adj_grade != q_mgr_grade:
+                                        continue
+
+                                filtered_dept_records.append(rec)
+
+                            st.info("💡 提示：如无调整，则默认为前序调整结果。全部调整完毕，请点击「确认本次调整」按钮。")
+                            st.markdown("<div class='dept-confirm-marker'></div>", unsafe_allow_html=True)
+                            if st.button("确认本次调整", key="btn_dept_confirm_all", use_container_width=True):
+                                ok_cnt = 0
+                                fail_cnt = 0
+                                for rec in dept_head_records:
+                                    ff = rec.get("fields", {})
+                                    r_id_all = rec.get("record_id")
+                                    mgr_grade_all = extract_text(ff.get("考核结果", "-")).strip() or "-"
+                                    if mgr_grade_all not in GRADE_OPTIONS:
+                                        continue
+                                    adj_existing = extract_text(ff.get("一级部门调整考核结果", "")).strip()
+                                    default_grade = adj_existing if adj_existing in GRADE_OPTIONS else mgr_grade_all
+                                    selected_grade = st.session_state.get(f"dept_adj_grade_{r_id_all}", default_grade)
+                                    if selected_grade not in GRADE_OPTIONS:
+                                        selected_grade = default_grade
+                                    update_data = {
+                                        "一级部门调整考核结果": selected_grade,
+                                        "一级部门负责人调整完毕": "是",
+                                    }
+                                    ok, _msg = update_record_safely(APP_TOKEN, TABLE_ID, r_id_all, update_data)
+                                    if ok:
+                                        ok_cnt += 1
+                                    else:
+                                        fail_cnt += 1
+                                if fail_cnt == 0:
+                                    dept_msg_box.info(f"已确认本次调整，共完成 {ok_cnt} 人。")
+                                else:
+                                    dept_msg_box.error(f"确认完成 {ok_cnt} 人，失败 {fail_cnt} 人，请重试。")
+                                time.sleep(0.6)
+                                st.rerun()
+
+                            # 表头：姓名(工号) / 部门(二-三-四)+岗位 / 自评等级 / 考核等级 / 调整等级
+                            # 取消「操作」列后，重新按 5 列分散对齐
+                            h1, h2, h3, h4, h5 = st.columns([2.4, 3.4, 1.2, 1.2, 1.6])
+                            h1.markdown("<div class='sub-list-head'>姓名（工号）</div>", unsafe_allow_html=True)
+                            h2.markdown("<div class='sub-list-head'>子部门/岗位</div>", unsafe_allow_html=True)
+                            h3.markdown("<div class='sub-list-head'>自评等级</div>", unsafe_allow_html=True)
+                            h4.markdown("<div class='sub-list-head'>考核等级</div>", unsafe_allow_html=True)
+                            h5.markdown("<div class='sub-list-head' style='color:#66b2ff; font-weight:800;'>调整等级</div>", unsafe_allow_html=True)
+                            st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
+
+                            for rec in filtered_dept_records:
+                                f = rec.get("fields", {})
+                                r_id = rec.get("record_id")
+                                name = extract_text(f.get("姓名"), "未知姓名").strip()
+                                emp = extract_text(f.get("工号") or f.get("员工工号"), "未知工号").strip()
+                                job = extract_text(f.get("岗位") or f.get("职位"), "未分配").strip()
+                                self_grade = extract_text(f.get("自评等级", "-")).strip() or "-"
+                                mgr_grade = extract_text(f.get("考核结果", "-")).strip() or "-"
+                                dept_chain = build_dept_chain(f)
+                                # 一级部门负责人：默认取上级评分结果；若已有调整结果则展示当前调整值
+                                adj_grade_field = extract_text(f.get("一级部门调整考核结果", "")).strip()
+                                adj_grade_default = adj_grade_field if adj_grade_field in GRADE_OPTIONS else (mgr_grade if mgr_grade in GRADE_OPTIONS else "-")
+
+                                c1, c2, c3, c4, c5 = st.columns([2.4, 3.4, 1.2, 1.2, 1.6], vertical_alignment="center")
+                                c1.markdown(
+                                    f"<div class='sub-list-cell' style='color:#E0E0E0; white-space:normal;'><b>{name}</b><br>（{emp}）</div>",
+                                    unsafe_allow_html=True,
+                                )
+                                c2.markdown(
+                                    f"<div class='sub-list-cell' style='color:#b0b0b0; white-space:normal;' title='{dept_chain} | {job}'>{dept_chain}<br>{job}</div>",
+                                    unsafe_allow_html=True,
+                                )
+                                c3.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0;'>{self_grade}</div>", unsafe_allow_html=True)
+                                c4.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0;'>{mgr_grade}</div>", unsafe_allow_html=True)
+
+                                # 调整等级下拉
+                                disable_adjust = mgr_grade not in GRADE_OPTIONS
+                                adjust_options = GRADE_OPTIONS + ["-"]
+                                if disable_adjust:
+                                    init_idx = adjust_options.index("-")
+                                else:
+                                    try:
+                                        init_idx = adjust_options.index(adj_grade_default) if adj_grade_default in adjust_options else adjust_options.index(mgr_grade)
+                                    except ValueError:
+                                        init_idx = 0
+                                c5.markdown("<div class='adjust-grade-marker'></div>", unsafe_allow_html=True)
+                                new_grade = c5.selectbox(
+                                    "选择等级",
+                                    options=adjust_options,
+                                    index=init_idx,
+                                    key=f"dept_adj_grade_{r_id}",
+                                    disabled=disable_adjust,
+                                    label_visibility="collapsed",
+                                )
+                                # 选中等级即自动写入「一级部门调整考核结果」
+                                if (not disable_adjust) and (new_grade in GRADE_OPTIONS) and (new_grade != adj_grade_field):
+                                    ok, msg = update_record_safely(
+                                        APP_TOKEN,
+                                        TABLE_ID,
+                                        r_id,
+                                        {"一级部门调整考核结果": new_grade},
+                                    )
+                                    if not ok:
+                                        dept_msg_box.error(f"保存 {name} 调整失败：{msg}")
+                                st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
+
+                            if not filtered_dept_records:
+                                st.caption("当前筛选条件下暂无员工。")
+
+                            st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
+
+                # ===== 分管高管调整 =====
+                if has_vp_tab:
+                    with sub_tabs[1]:
+                        all_records = all_records_snapshot or fetch_all_records_safely(APP_TOKEN, TABLE_ID)
+                        vp_records = []
+                        for rec in all_records:
+                            f = rec.get("fields", {})
+                            vp_str = extract_text(f.get("分管高管") or f.get("高管"), "").strip()
+                            emp_name = extract_text(f.get("姓名"), "").strip()
+                            # 分管高管可见其名下全部员工（排除本人）
+                            if user_name and user_name in vp_str and emp_name != user_name:
+                                vp_records.append(rec)
+
+                        total_cnt = len(vp_records)
+                        done_cnt = 0
+                        for rec in vp_records:
+                            f = rec.get("fields", {})
+                            if extract_text(f.get("分管高管调整完毕", "")).strip() == "是":
+                                done_cnt += 1
+                        pending_cnt = total_cnt - done_cnt
+
+                        st.markdown("<div class='module-title'>📌 分管高管调整进展</div>", unsafe_allow_html=True)
+                        st.markdown(
+                            f"""
+                            <div style="font-size: 14px; color: #E0E0E0; margin-bottom: 10px; padding: 10px; background-color: rgba(255,255,255,0.02); border-radius: 6px; border: 1px solid #444;">
+                                <div style="display:flex; justify-content:center; gap:18px; flex-wrap:wrap;">
+                                    <span><b>覆盖人数：</b><span style="color:#1E90FF;">{total_cnt}</span> 人</span>
+                                    <span><b>已完成调整：</b><span style="color:#00e676;">{done_cnt}</span> 人</span>
+                                    <span><b>待调整：</b><span style="color:#FFA500;">{pending_cnt}</span> 人</span>
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+
+                        st.markdown("<div class='module-title'>👇 待调整名单</div>", unsafe_allow_html=True)
+                        vp_msg_box = st.empty()
+                        if not vp_records:
+                            st.info("💡 提示：暂无需您调整的员工。")
+                        else:
+                            # 顶部筛选：工号姓名 / 部门 / 状态 / 考核等级（与一级部门负责人一致）
+                            f1, f2, f3, f4 = st.columns(4, gap="small")
+                            q_name_emp = f1.text_input("搜索工号、姓名", placeholder="🔎 搜索工号、姓名", key="vp_filter_name_emp", label_visibility="collapsed")
+                            dept_options = set()
+                            for rec in vp_records:
+                                ff = rec.get("fields", {})
+                                _d1 = _clean_dept_name(ff.get("一级部门"))
+                                if _d1:
+                                    dept_options.add(_d1)
+                            dept_options = sorted(dept_options)
+                            q_dept = f2.selectbox(
+                                "部门",
+                                ["全部部门"] + dept_options,
+                                key="vp_filter_dept",
+                                label_visibility="collapsed",
+                            )
+                            q_status = f3.selectbox(
+                                "状态",
+                                ["全部状态", "待上级评分", "待调整", "已完成调整"],
+                                key="vp_filter_status",
+                                label_visibility="collapsed",
+                            )
+                            q_mgr_grade = f4.selectbox(
+                                "考核等级",
+                                ["全部调整等级"] + GRADE_OPTIONS + ["-"],
+                                key="vp_filter_mgr_grade",
+                                label_visibility="collapsed",
+                            )
+
+                            filtered_vp_records = []
+                            q1 = q_name_emp.strip().lower()
+                            q2 = q_dept.strip().lower()
+                            for rec in vp_records:
+                                f = rec.get("fields", {})
+                                name = extract_text(f.get("姓名"), "").strip()
+                                emp = extract_text(f.get("工号") or f.get("员工工号"), "").strip()
+                                dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
+                                mgr_grade = extract_text(f.get("考核结果", "-")).strip() or "-"
+                                adj_grade = extract_text(f.get("分管高管调整考核结果", "-")).strip() or "-"
+                                done_flag = extract_text(f.get("分管高管调整完毕", "")).strip() == "是"
+                                has_mgr_grade = mgr_grade in GRADE_OPTIONS
+                                has_adj_grade = adj_grade in GRADE_OPTIONS
+                                status = "已完成调整" if done_flag else ("待调整" if has_mgr_grade else "待上级评分")
+
+                                if q1 and (q1 not in name.lower() and q1 not in emp.lower()):
+                                    continue
+                                if q_dept != "全部部门" and (q2 not in dept_l1.lower()):
+                                    continue
+                                if q_status != "全部状态" and q_status != status:
+                                    continue
+                                if q_mgr_grade != "全部调整等级":
+                                    if q_mgr_grade == "-" and has_adj_grade:
+                                        continue
+                                    if q_mgr_grade in GRADE_OPTIONS and adj_grade != q_mgr_grade:
+                                        continue
+
+                                filtered_vp_records.append(rec)
+
+                            st.info("💡 提示：如无调整，则默认为前序调整结果。全部调整完毕，请点击「确认本次调整」按钮。")
+                            st.markdown("<div class='vp-confirm-marker'></div>", unsafe_allow_html=True)
+                            if st.button("确认本次调整", key="btn_vp_confirm_all", use_container_width=True):
+                                ok_cnt = 0
+                                fail_cnt = 0
+                                for rec in vp_records:
+                                    ff = rec.get("fields", {})
+                                    r_id_all = rec.get("record_id")
+                                    mgr_grade_all = extract_text(ff.get("考核结果", "-")).strip() or "-"
+                                    dept_done_all = extract_text(ff.get("一级部门负责人调整完毕", "")).strip() == "是"
+                                    if (mgr_grade_all not in GRADE_OPTIONS) or (not dept_done_all):
+                                        continue
+                                    adj_existing = extract_text(ff.get("分管高管调整考核结果", "")).strip()
+                                    default_grade = adj_existing if adj_existing in GRADE_OPTIONS else mgr_grade_all
+                                    selected_grade = st.session_state.get(f"vp_adj_grade_{r_id_all}", default_grade)
+                                    if selected_grade not in GRADE_OPTIONS:
+                                        selected_grade = default_grade
+                                    update_data = {
+                                        "分管高管调整考核结果": selected_grade,
+                                        "分管高管调整完毕": "是",
+                                    }
+                                    ok, _msg = update_record_safely(APP_TOKEN, TABLE_ID, r_id_all, update_data)
+                                    if ok:
+                                        ok_cnt += 1
+                                    else:
+                                        fail_cnt += 1
+                                if fail_cnt == 0:
+                                    vp_msg_box.info(f"分管高管已确认调整，共完成 {ok_cnt} 人。")
+                                else:
+                                    vp_msg_box.error(f"确认完成 {ok_cnt} 人，失败 {fail_cnt} 人，请重试。")
+                                time.sleep(0.6)
+                                st.rerun()
+
+                            # 表头与展示：与一级部门负责人一致
+                            h1, h2, h3, h4, h5 = st.columns([2.4, 3.4, 1.2, 1.2, 1.6])
+                            h1.markdown("<div class='sub-list-head'>姓名（工号）</div>", unsafe_allow_html=True)
+                            h2.markdown("<div class='sub-list-head'>一级部门/岗位</div>", unsafe_allow_html=True)
+                            h3.markdown("<div class='sub-list-head'>自评等级</div>", unsafe_allow_html=True)
+                            h4.markdown("<div class='sub-list-head'>考核等级</div>", unsafe_allow_html=True)
+                            h5.markdown("<div class='sub-list-head' style='color:#66b2ff; font-weight:800;'>调整等级</div>", unsafe_allow_html=True)
+                            st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
+
+                            for rec in filtered_vp_records:
+                                f = rec.get("fields", {})
+                                r_id = rec.get("record_id")
+                                name = extract_text(f.get("姓名"), "未知姓名").strip()
+                                emp = extract_text(f.get("工号") or f.get("员工工号"), "未知工号").strip()
+                                job = extract_text(f.get("岗位") or f.get("职位"), "未分配").strip()
+                                self_grade = extract_text(f.get("自评等级", "-")).strip() or "-"
+                                mgr_grade = extract_text(f.get("考核结果", "-")).strip() or "-"
+                                adj_grade_field = extract_text(f.get("分管高管调整考核结果", "")).strip()
+                                # 分管高管：默认取一级部门负责人已调整结果；若为空再回退上级评分结果
+                                adj_grade_default = adj_grade_field if adj_grade_field in GRADE_OPTIONS else (mgr_grade if mgr_grade in GRADE_OPTIONS else "-")
+                                dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
+                                dept_done = extract_text(f.get("一级部门负责人调整完毕", "")).strip() == "是"
+
+                                c1, c2, c3, c4, c5 = st.columns([2.4, 3.4, 1.2, 1.2, 1.6], vertical_alignment="center")
+                                c1.markdown(
+                                    f"<div class='sub-list-cell' style='color:#E0E0E0; white-space:normal;'><b>{name}</b><br>（{emp}）</div>",
+                                    unsafe_allow_html=True,
+                                )
+                                c2.markdown(
+                                    f"<div class='sub-list-cell' style='color:#b0b0b0; white-space:normal;' title='{dept_l1} | {job}'>{dept_l1}<br>{job}</div>",
+                                    unsafe_allow_html=True,
+                                )
+                                c3.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0;'>{self_grade}</div>", unsafe_allow_html=True)
+                                c4.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0;'>{mgr_grade}</div>", unsafe_allow_html=True)
+
+                                disable_adjust = (mgr_grade not in GRADE_OPTIONS) or (not dept_done)
+                                adjust_options = GRADE_OPTIONS + ["-"]
+                                if disable_adjust:
+                                    init_idx = adjust_options.index("-")
+                                else:
+                                    try:
+                                        init_idx = adjust_options.index(adj_grade_default) if adj_grade_default in adjust_options else adjust_options.index(mgr_grade)
+                                    except ValueError:
+                                        init_idx = 0
+                                c5.markdown("<div class='adjust-grade-marker'></div>", unsafe_allow_html=True)
+                                new_grade = c5.selectbox(
+                                    "选择等级",
+                                    options=adjust_options,
+                                    index=init_idx,
+                                    key=f"vp_adj_grade_{r_id}",
+                                    disabled=disable_adjust,
+                                    label_visibility="collapsed",
+                                )
+                                # 选中等级即自动写入「分管高管调整考核结果」
+                                if (not disable_adjust) and (new_grade in GRADE_OPTIONS) and (new_grade != adj_grade_field):
+                                    ok, msg = update_record_safely(
+                                        APP_TOKEN,
+                                        TABLE_ID,
+                                        r_id,
+                                        {"分管高管调整考核结果": new_grade},
+                                    )
+                                    if not ok:
+                                        vp_msg_box.error(f"保存 {name} 调整失败：{msg}")
+                                st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
+
+                            if not filtered_vp_records:
+                                st.caption("当前筛选条件下暂无员工。")
+
+                            st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
+        if idx_reports is not None:
+            with tabs[idx_reports]:
+                report_records_all = all_records_snapshot or fetch_all_records_safely(APP_TOKEN, TABLE_ID)
+                if not report_records_all:
+                    st.info("💡 提示：暂无可用于报表展示的数据。")
+                else:
+                    # 固定报表范围与周期：不再显示“视图范围/考核周期”控件
+                    scope_mode = "我的团队"
+
+                    # 过滤范围：视图与调整权限保持一致
+                    # - 分管高管：看到名下所有员工（按「分管高管 / 高管」字段，排除本人）
+                    # - 一级部门负责人：看到本部门所有员工（按「一级部门负责人 / 部门负责人」字段，排除本人）
+                    # - 普通管理者：沿用「直接评价人 / 评价人」作为我的团队
+                    report_scoped = []
+                    for rec in report_records_all:
+                        rf = rec.get("fields", {})
+                        emp_name = extract_text(rf.get("姓名"), "").strip()
+                        if scope_mode == "全公司":
+                            # 仅分管高管可切全公司
+                            report_scoped.append(rec)
+                        else:
+                            if is_vp:
+                                vp_str = extract_text(rf.get("分管高管") or rf.get("高管"), "").strip()
+                                if user_name and user_name in vp_str and emp_name != user_name:
+                                    report_scoped.append(rec)
+                            elif is_dept_head:
+                                dept_head_str = extract_text(rf.get("一级部门负责人") or rf.get("部门负责人"), "").strip()
+                                if user_name and user_name in dept_head_str and emp_name != user_name:
+                                    report_scoped.append(rec)
+                            else:
+                                rec_manager = extract_text(rf.get("直接评价人") or rf.get("评价人"), "").strip()
+                                if user_name and user_name in rec_manager:
+                                    report_scoped.append(rec)
+
+                    # 周期筛选
+                    def pick_cycle(ff):
+                        for k in ["绩效考核周期", "考核周期", "本次绩效考核周期", "本次考核周期"]:
+                            v = extract_text(ff.get(k), "").strip()
+                            if v:
+                                return v
+                        return current_cycle
+
+                    # 报表周期固定跟随员工信息周期
+                    selected_cycle = current_cycle
+
+                    report_records = []
+                    for rec in report_scoped:
+                        cyc = pick_cycle(rec.get("fields", {}))
+                        if cyc == selected_cycle:
+                            report_records.append(rec)
+
+                    total_cnt = len(report_records)
+                    if total_cnt == 0:
+                        st.info("💡 提示：当前筛选条件下暂无数据。")
+                    else:
+                        # 聚合统计
+                        target_set_cnt = 0
+                        self_done_cnt = 0
+                        mgr_done_cnt = 0
+                        public_done_cnt = 0
+                        grade_counts = Counter()
+                        dept_stats = {}
+                        member_cards = []
+
+                        for rec in report_records:
+                            f = rec.get("fields", {})
+                            name = extract_text(f.get("姓名"), "未知姓名").strip()
+                            emp = extract_text(f.get("工号") or f.get("员工工号"), "未知工号").strip()
+                            job = extract_text(f.get("岗位") or f.get("职位"), "未分配").strip()
+                            # 报表部门口径：
+                            # - 分管高管：按一级部门展示
+                            # - 一级部门负责人：按二级部门展示
+                            # - 其他角色：默认按二级部门，缺失回退一级部门
+                            dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
+                            dept_l2 = normalize_dept_text(f.get("二级部门"))
+                            if is_vp:
+                                dept = dept_l1
+                            elif is_dept_head:
+                                dept = dept_l2 or dept_l1
+                            else:
+                                dept = dept_l2 or dept_l1
+
+                            has_target = False
+                            for i in range(1, 6):
+                                if extract_text(f.get(f"工作目标{i}及总结"), "").strip():
+                                    has_target = True
+                                    break
+                            if has_target:
+                                target_set_cnt += 1
+
+                            self_done = extract_text(f.get("自评是否提交", "")).strip() == "是"
+                            mgr_done = extract_text(f.get("上级评价是否完成", "")).strip() == "是"
+                            public_done = extract_text(f.get("分管高管调整完毕", "")).strip() == "是"
+                            if self_done:
+                                self_done_cnt += 1
+                            if mgr_done:
+                                mgr_done_cnt += 1
+                            if public_done:
+                                public_done_cnt += 1
+
+                            vp_adj = extract_text(f.get("分管高管调整考核结果", ""), "").strip()
+                            dept_adj = extract_text(f.get("一级部门调整考核结果", ""), "").strip()
+                            mgr_grade = extract_text(f.get("考核结果", ""), "").strip()
+                            final_grade = "-"
+                            for cand in [vp_adj, dept_adj, mgr_grade]:
+                                if cand in GRADE_OPTIONS:
+                                    final_grade = cand
+                                    break
+                            if final_grade in GRADE_OPTIONS:
+                                grade_counts[final_grade] += 1
+
+                            dept_info = dept_stats.setdefault(dept, {"total": 0, "done": 0, "grades": {g: 0 for g in GRADE_OPTIONS}})
+                            dept_info["total"] += 1
+                            if mgr_done:
+                                dept_info["done"] += 1
+                            if final_grade in GRADE_OPTIONS:
+                                dept_info["grades"][final_grade] += 1
+
+                            if public_done:
+                                status_txt = "已公示"
+                            elif mgr_done:
+                                status_txt = "上级已评"
+                            elif self_done:
+                                status_txt = "自评已交"
+                            elif has_target:
+                                status_txt = "目标设定中"
+                            else:
+                                status_txt = "待启动"
+
+                            member_cards.append({
+                                "name": name,
+                                "emp": emp,
+                                "job": job,
+                                "dept": dept,
+                                "grade": final_grade,
+                                "status": status_txt,
+                            })
+
+                        # 🏟️ 团队概览（所有管理者视图一致，仅包含等级分布+进度统计）
+                        if not can_adjust_tab:
+                            # 简化版：非调整权限管理者
+                            st.markdown("<div class='module-title'>🧭 绩效等级分布</div>", unsafe_allow_html=True)
+                            simple_grade_df = pd.DataFrame([{"等级": g, "人数": grade_counts.get(g, 0)} for g in ["S", "A", "B+", "B", "B-", "C"]])
+                            simple_grade_chart = (
+                                alt.Chart(simple_grade_df)
+                                .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
+                                .encode(
+                                    x=alt.X("等级:N", sort=["S", "A", "B+", "B", "B-", "C"]),
+                                    y=alt.Y("人数:Q"),
+                                    tooltip=["等级", "人数"],
+                                    color=alt.Color("等级:N", legend=None, scale=alt.Scale(domain=["S", "A", "B+", "B", "B-", "C"], range=["#4CAF50", "#42A5F5", "#66BB6A", "#90A4AE", "#FFB74D", "#EF5350"]))
+                                )
+                            )
+                            st.altair_chart(simple_grade_chart, use_container_width=True)
+
+                            st.markdown("<div class='module-title'>📈 考核进度统计</div>", unsafe_allow_html=True)
+                            p1 = target_set_cnt / total_cnt
+                            p2 = self_done_cnt / total_cnt
+                            p3 = mgr_done_cnt / total_cnt
+                            p4 = public_done_cnt / total_cnt
+                            st.write(f"目标设定：{target_set_cnt}/{total_cnt}")
+                            st.progress(p1)
+                            st.write(f"自我评价：{self_done_cnt}/{total_cnt}")
+                            st.progress(p2)
+                            st.write(f"上级评价：{mgr_done_cnt}/{total_cnt}")
+                            st.progress(p3)
+                            st.write(f"结果公示：{public_done_cnt}/{total_cnt}")
+                            st.progress(p4)
+
+                            st.markdown("<div class='module-title'>🧾 部门绩效详情</div>", unsafe_allow_html=True)
+                            dept_rows = []
+                            for dept_name, dval in sorted(dept_stats.items(), key=lambda x: x[0]):
+                                total_d = dval["total"]
+                                done = dval["done"]
+                                rate = f"{round(done / total_d * 100, 1) if total_d else 0}%"
+                                dept_rows.append({
+                                    "部门": dept_name,
+                                    "总人数": total_d,
+                                    "已完成": done,
+                                    "完成率": rate,
+                                    "S级": dval["grades"]["S"],
+                                    "A级": dval["grades"]["A"],
+                                    "B+级": dval["grades"]["B+"],
+                                    "B级": dval["grades"]["B"],
+                                    "B-级": dval["grades"]["B-"],
+                                    "C级": dval["grades"]["C"],
+                                })
+                            dept_df = pd.DataFrame(dept_rows)
+                            if not dept_df.empty:
+                                numeric_cols = [c for c in dept_df.columns if c != "部门"]
+                                dept_df = dept_df.style.set_properties(subset=["部门"], **{"text-align": "left"})
+                                if numeric_cols:
+                                    dept_df = dept_df.set_properties(subset=numeric_cols, **{"text-align": "center"})
+                            st.dataframe(dept_df, use_container_width=True, hide_index=True)
+                        else:
+                            # 有调整权限的管理者：一级部门负责人/分管高管统一同一套报表视图
+                            st.markdown("<div class='module-title'>📊 绩效概览</div>", unsafe_allow_html=True)
+                            completion_rate = 0 if total_cnt == 0 else round(mgr_done_cnt / total_cnt * 100, 1)
+                            kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+                            drill_mode = st.session_state.get("report_member_kpi_drill", "all")
+                            kpi1.markdown("<div class='report-kpi-label'>考核总人数</div>", unsafe_allow_html=True)
+                            kpi1.markdown("<div class='report-kpi-total'></div>", unsafe_allow_html=True)
+                            if kpi1.button(str(total_cnt), key="btn_kpi_total_drill", use_container_width=True):
+                                st.session_state.report_member_kpi_drill = "all"
+                                st.session_state.report_member_page = 1
+                                st.rerun()
+
+                            kpi2.markdown("<div class='report-kpi-label'>已完成评价</div>", unsafe_allow_html=True)
+                            kpi2.markdown("<div class='report-kpi-done'></div>", unsafe_allow_html=True)
+                            if kpi2.button(str(mgr_done_cnt), key="btn_kpi_done_drill", use_container_width=True):
+                                st.session_state.report_member_kpi_drill = "done"
+                                st.session_state.report_member_page = 1
+                                st.rerun()
+
+                            kpi3.markdown("<div class='report-kpi-label'>总体完成率</div>", unsafe_allow_html=True)
+                            kpi3.markdown("<div class='report-kpi-rate'></div>", unsafe_allow_html=True)
+                            if kpi3.button(f"{completion_rate}%", key="btn_kpi_rate_drill", use_container_width=True):
+                                st.session_state.report_member_kpi_drill = "done"
+                                st.session_state.report_member_page = 1
+                                st.rerun()
+
+                            kpi4.markdown("<div class='report-kpi-label'>剩余未评</div>", unsafe_allow_html=True)
+                            kpi4.markdown("<div class='report-kpi-pending'></div>", unsafe_allow_html=True)
+                            if kpi4.button(str(total_cnt - mgr_done_cnt), key="btn_kpi_pending_drill", use_container_width=True):
+                                st.session_state.report_member_kpi_drill = "pending"
+                                st.session_state.report_member_page = 1
+                                st.rerun()
+
+                            grade_color_map = {
+                                "S": "#4CAF50",
+                                "A": "#42A5F5",
+                                "B+": "#66BB6A",
+                                "B": "#90A4AE",
+                                "B-": "#FFB74D",
+                                "C": "#EF5350",
+                            }
+                            st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+                            grade_cols = st.columns(6)
+                            grade_marker_map = {
+                                "S": "report-kpi-grade-s",
+                                "A": "report-kpi-grade-a",
+                                "B+": "report-kpi-grade-bp",
+                                "B": "report-kpi-grade-b",
+                                "B-": "report-kpi-grade-bm",
+                                "C": "report-kpi-grade-c",
+                            }
+                            for idx, g in enumerate(["S", "A", "B+", "B", "B-", "C"]):
+                                grade_cols[idx].markdown(f"<div class='report-grade-label'>{g}评级</div>", unsafe_allow_html=True)
+                                grade_cols[idx].markdown(f"<div class='{grade_marker_map[g]}'></div>", unsafe_allow_html=True)
+                                if grade_cols[idx].button(str(grade_counts.get(g, 0)), key=f"btn_kpi_grade_{g}", use_container_width=True):
+                                    st.session_state.report_member_kpi_drill = f"grade:{g}"
+                                    st.session_state.report_member_page = 1
+                                    st.rerun()
+
+                            export_rows = []
+                            for m in member_cards:
+                                export_rows.append({
+                                    "姓名": m["name"],
+                                    "工号": m["emp"],
+                                    "部门": m["dept"],
+                                    "岗位": m["job"],
+                                    "绩效等级": m["grade"],
+                                    "当前状态": m["status"],
+                                    "周期": selected_cycle,
+                                    "视图范围": scope_mode,
+                                })
+                            csv_buffer = io.StringIO()
+                            writer = csv.DictWriter(csv_buffer, fieldnames=list(export_rows[0].keys()) if export_rows else ["姓名"])
+                            writer.writeheader()
+                            if export_rows:
+                                writer.writerows(export_rows)
+                            csv_bytes = csv_buffer.getvalue().encode("utf-8-sig")
+
+                            st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
+                            # 团队成员筛选与分页控制合并为同一行
+                            pending_dept_drill = st.session_state.get("report_member_dept_pending", "")
+                            if pending_dept_drill:
+                                st.session_state.report_member_dept = pending_dept_drill
+                                st.session_state.report_member_page = 1
+                                st.session_state.report_member_dept_pending = ""
+                            rf1, rf2, rf3, rf4, rf5, rf6 = st.columns([1.2, 1.2, 1.2, 1.2, 1.0, 1.0], gap="small")
+                            rm_query = rf1.text_input(
+                                "搜索工号、姓名",
+                                placeholder="🔎 搜索工号、姓名",
+                                key="report_member_query",
+                                label_visibility="collapsed",
+                            )
+                            rm_dept_options = sorted({m.get("dept", "") for m in member_cards if m.get("dept", "")})
+                            rm_dept = rf2.selectbox(
+                                "部门",
+                                ["全部部门"] + rm_dept_options,
+                                key="report_member_dept",
+                                label_visibility="collapsed",
+                            )
+                            rm_status_options = ["全部状态", "待启动", "目标设定中", "自评已交", "上级已评", "已公示"]
+                            rm_status = rf3.selectbox(
+                                "状态",
+                                rm_status_options,
+                                key="report_member_status",
+                                label_visibility="collapsed",
+                            )
+                            rm_grade = rf4.selectbox(
+                                "等级",
+                                ["全部考核等级"] + GRADE_OPTIONS + ["-"],
+                                key="report_member_grade",
+                                label_visibility="collapsed",
+                            )
+                            page_size = rf5.selectbox(
+                                "每页",
+                                [6, 9, 12, 18],
+                                index=1,
+                                key="report_member_page_size",
+                                label_visibility="collapsed",
+                                format_func=lambda x: f"每页 {x}",
+                            )
+
+                            filtered_members = []
+                            q_member = rm_query.strip().lower()
+                            q_dept = rm_dept.strip().lower()
+                            for m in member_cards:
+                                m_name = str(m.get("name", ""))
+                                m_emp = str(m.get("emp", ""))
+                                m_dept = str(m.get("dept", ""))
+                                m_status = str(m.get("status", ""))
+                                m_grade = str(m.get("grade", "-"))
+                                if q_member and (q_member not in m_name.lower() and q_member not in m_emp.lower()):
+                                    continue
+                                if rm_dept != "全部部门" and q_dept not in m_dept.lower():
+                                    continue
+                                if rm_status != "全部状态" and m_status != rm_status:
+                                    continue
+                                if rm_grade != "全部考核等级" and m_grade != rm_grade:
+                                    continue
+                                if drill_mode == "done" and m_status not in ["上级已评", "已公示"]:
+                                    continue
+                                if drill_mode == "pending" and m_status in ["上级已评", "已公示"]:
+                                    continue
+                                if drill_mode.startswith("grade:"):
+                                    target_g = drill_mode.split(":", 1)[1]
+                                    if m_grade != target_g:
+                                        continue
+                                filtered_members.append(m)
+
+                            total_pages = max(1, math.ceil(len(filtered_members) / page_size))
+                            current_page = int(st.session_state.get("report_member_page", 1))
+                            if current_page > total_pages:
+                                st.session_state.report_member_page = 1
+                                current_page = 1
+                            page_no = rf6.selectbox(
+                                "页码",
+                                options=list(range(1, total_pages + 1)),
+                                index=max(0, current_page - 1),
+                                key="report_member_page",
+                                label_visibility="collapsed",
+                                format_func=lambda x: f"页码 {x}",
+                            )
+                            start_idx = (page_no - 1) * page_size
+                            end_idx = start_idx + page_size
+                            page_members = filtered_members[start_idx:end_idx]
+                            st.caption(f"筛选后人数：{len(filtered_members)}")
+                            st.caption(f"当前展示 {len(page_members)} / {len(filtered_members)} 人（第 {page_no}/{total_pages} 页）")
+                            card_cols = st.columns(3)
+                            for i, m in enumerate(page_members):
+                                cc = card_cols[i % 3]
+                                cc.markdown(
+                                    f"""
+                                    <div style="padding:10px; border:1px solid rgba(255,255,255,0.08); border-radius:8px; margin-bottom:8px;">
+                                        <div style="font-size:16px; font-weight:700; color:#EAEAEA;">{m['name']} <span style="color:#66b2ff;">{m['grade']}</span></div>
+                                        <div style="font-size:12px; color:#9aa0a6;">{m['dept']} · {m['job']}</div>
+                                        <div style="font-size:12px; color:#b0b0b0;">{m['status']}</div>
+                                    </div>
+                                    """,
+                                    unsafe_allow_html=True,
+                                )
+
+                            st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
+                            st.markdown("<div class='module-title'>📈 绩效视图</div>", unsafe_allow_html=True)
+                            chart_l, chart_r = st.columns(2)
+                            with chart_l:
+                                st.markdown("**绩效等级分布**")
+                                report_grade_df = pd.DataFrame(
+                                    [{"等级": g, "人数": grade_counts.get(g, 0)} for g in ["S", "A", "B+", "B", "B-", "C"]]
+                                )
+                                donut = (
+                                    alt.Chart(report_grade_df)
+                                    .mark_arc(innerRadius=55, outerRadius=95)
+                                    .encode(
+                                        theta=alt.Theta("人数:Q"),
+                                        color=alt.Color(
+                                            "等级:N",
+                                            scale=alt.Scale(
+                                                domain=["S", "A", "B+", "B", "B-", "C"],
+                                                range=["#4CAF50", "#42A5F5", "#66BB6A", "#90A4AE", "#FFB74D", "#EF5350"],
+                                            ),
+                                        ),
+                                        tooltip=["等级", "人数"],
+                                    )
+                                ).properties(height=320)
+                                st.altair_chart(donut, use_container_width=True)
+                            with chart_r:
+                                st.markdown("**各部门考核完成率**")
+                                dept_rate_rows = []
+                                for dept_name, dval in sorted(dept_stats.items(), key=lambda x: x[0]):
+                                    total_d = dval["total"]
+                                    done = dval["done"]
+                                    dept_rate_rows.append(
+                                        {
+                                            "部门": dept_name,
+                                            "完成率": (round(done / total_d * 100, 1) if total_d else 0.0),
+                                            "完成": done,
+                                            "总数": total_d,
+                                        }
+                                    )
+                                dept_rate_df = pd.DataFrame(dept_rate_rows)
+                                dept_bar = (
+                                    alt.Chart(dept_rate_df)
+                                    .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
+                                    .encode(
+                                        y=alt.Y(
+                                            "部门:N",
+                                            sort="-x",
+                                            axis=alt.Axis(labelLimit=180),
+                                        ),
+                                        x=alt.X("完成率:Q", scale=alt.Scale(domain=[0, 100])),
+                                        tooltip=["部门", "完成", "总数", "完成率"],
+                                        color=alt.value("#66BB6A"),
+                                    )
+                                ).properties(height=320)
+                                st.altair_chart(dept_bar, use_container_width=True)
+
+                            st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
+                            st.markdown("<div class='module-title'>🧾 部门绩效详情</div>", unsafe_allow_html=True)
+                            dept_rows = []
+                            for dept_name, dval in sorted(dept_stats.items(), key=lambda x: x[0]):
+                                total_d = dval["total"]
+                                done = dval["done"]
+                                rate = f"{round(done / total_d * 100, 1) if total_d else 0}%"
+                                dept_rows.append({
+                                    "部门": dept_name,
+                                    "总人数": total_d,
+                                    "已完成": done,
+                                    "完成率": rate,
+                                    "S级": dval["grades"]["S"],
+                                    "A级": dval["grades"]["A"],
+                                    "B+级": dval["grades"]["B+"],
+                                    "B级": dval["grades"]["B"],
+                                    "B-级": dval["grades"]["B-"],
+                                    "C级": dval["grades"]["C"],
+                                })
+                            dept_df = pd.DataFrame(dept_rows)
+                            st.caption("点击表格任意行（包含数字单元格）可下钻到团队成员")
+                            dept_select_event = st.dataframe(
+                                dept_df,
+                                use_container_width=True,
+                                hide_index=True,
+                                on_select="rerun",
+                                selection_mode="single-row",
+                                key="report_dept_table_drill",
+                            )
+                            selected_rows = (dept_select_event or {}).get("selection", {}).get("rows", [])
+                            if selected_rows:
+                                selected_idx = selected_rows[0]
+                                if 0 <= selected_idx < len(dept_df):
+                                    target_dept = str(dept_df.iloc[selected_idx]["部门"]).strip()
+                                    if target_dept and st.session_state.get("report_member_dept") != target_dept:
+                                        st.session_state.report_member_dept_pending = target_dept
+                                        st.rerun()
+
+                            st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+                            d1, d2 = st.columns([1, 1])
+                            d1.download_button("📄 导出CSV", data=csv_bytes, file_name="绩效报表.csv", mime="text/csv", use_container_width=True)
+                            d2.download_button("📘 导出Excel(兼容)", data=csv_bytes, file_name="绩效报表.xls", mime="application/vnd.ms-excel", use_container_width=True)
 
     # ==========================================
     # 🟢 模块 3：历史信息 (所有人可见，索引永远是列表最后一个)
     # ==========================================
     with tabs[-1]:
-        st.markdown("### 📂 历史绩效档案")
+        st.markdown("<div class='module-title'>📂 历史绩效档案</div>", unsafe_allow_html=True)
         
         perf_cycle = extract_text(fields.get("上一次绩效考核对应周期", "暂无数据"))
         last_perf_result = extract_text(fields.get("上一次绩效考核结果", "暂无数据"))
@@ -1169,7 +2625,7 @@ def main_app():
             
         st.markdown("---")
         
-        st.markdown("### ✍️ 上一次绩效考核评语")
+        st.markdown("<div class='module-title'>✍️ 上一次绩效考核评语</div>", unsafe_allow_html=True)
         st.info(last_comment)
 
 if st.session_state.user_info is None:
