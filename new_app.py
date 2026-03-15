@@ -42,6 +42,8 @@ if missing:
 
 SCORE_OPTIONS = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
 GRADE_OPTIONS = ["S", "A", "B+", "B", "B-", "C"]
+# 绩效等级图表配色（S/A蓝、B+绿、B灰、B-橙、C红），全应用统一
+GRADE_CHART_COLORS = ["#4CAFEE", "#4CAFEE", "#8BC34A", "#90A4AE", "#FFC107", "#F44336"]
 
 # --- 初始化会话状态 ---
 if 'user_info' not in st.session_state:
@@ -585,26 +587,45 @@ def main_app():
 
     /* 上级评分页：更紧凑的分隔线与列表行 */
     hr.sub-hr {
-        margin: 6px 0px !important;
+        margin: 10px 0px !important;
         border: none !important;
         border-top: 1px solid rgba(255,255,255,0.08) !important;
     }
     .sub-list-head {
         font-size: 14px;
         color: #b0b0b0;
-        margin: 0 0 8px 0;
+        margin: 0 0 10px 0;
         font-weight: 700;
         text-align: center;
+        white-space: nowrap;
     }
     .sub-list-cell {
         font-size: 14px;
         margin: 0;
-        padding: 6px 0;
-        line-height: 1.4;
+        padding: 10px 12px;
+        line-height: 1.6;
         text-align: center;
         overflow: hidden;
         text-overflow: ellipsis;
-        white-space: nowrap;
+    }
+    .sub-list-cell-multiline {
+        line-height: 1.8;
+        padding: 12px 12px;
+    }
+    /* 综合调整：待调整名单表格列间距缩小，第一二列空隙适中 */
+    [data-testid="stHorizontalBlock"]:has(.sub-list-head),
+    [data-testid="stHorizontalBlock"]:has(.sub-list-cell) {
+        gap: 8px !important;
+    }
+    /* 综合调整：待调整名单表格列内容居中，避免挤在右侧 */
+    div:has(#vp-adjust-table) ~ * [data-testid="column"] > div,
+    div:has(#dept-adjust-table) ~ * [data-testid="column"] > div,
+    [data-testid="column"]:has(.sub-list-head) > div,
+    [data-testid="column"]:has(.sub-list-cell) > div {
+        display: flex !important;
+        justify-content: center !important;
+        align-items: center !important;
+        width: 100% !important;
     }
     /* 搜索/筛选：全局统一小字号（强制命中） */
     .stApp [data-baseweb="input"] input {
@@ -987,6 +1008,7 @@ def main_app():
     department = "-".join(dept_parts) if dept_parts else "未获取"
     manager = extract_text(fields.get('直接评价人') or fields.get('评价人'))
     vp = extract_text(fields.get('分管高管') or fields.get('高管'))
+    dept_head = extract_text(fields.get('一级部门负责人') or fields.get('部门负责人'))
     hrbp = extract_text(fields.get('HRBP') or fields.get('HRBP Lead'))
 
     # -- 本人自评算分验证逻辑 (前置计算) --
@@ -1050,16 +1072,31 @@ def main_app():
                     is_vp = True
 
     # 4. 侧边栏渲染 (从上到下严格顺序)
-    st.sidebar.markdown(f"### 👋 欢迎 {user_name}（{emp_id}）！")
-
-    # 另起一行：调整岗位和角色的顺序，并去掉“角色”二字
-    st.sidebar.write(f"{job_title} | {st.session_state.role}")
+    st.sidebar.markdown(f"### 👋 欢迎 {user_name}！")
     st.sidebar.markdown("---")
-    
+
+    st.sidebar.markdown("### 📅 绩效考核周期")
+    st.sidebar.markdown(f"""
+        <div style="background-color: rgba(38, 39, 48, 0.8); padding: 15px; border-radius: 8px; border: 1px solid #333;">
+            <div style="margin-bottom: 10px; color: #b0b0b0; font-size: 14px;">{current_cycle}</div>
+            <div style="margin-bottom: 10px; color: #b0b0b0; font-size: 14px;">直接评价人：{manager}</div>
+            <div style="margin-bottom: 10px; color: #b0b0b0; font-size: 14px;">一级部门负责人：{dept_head}</div>
+            <div style="margin-bottom: 10px; color: #b0b0b0; font-size: 14px;">分管高管：{vp}</div>
+            <div style="color: #b0b0b0; font-size: 14px;">HRBP： {hrbp}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:12px 0;'/>", unsafe_allow_html=True)
+
     st.sidebar.markdown("### ℹ️ 员工信息")
-    st.sidebar.caption(f"绩效考核周期: {current_cycle}")
-    st.sidebar.caption(f"您的部门: {department}")
-    st.sidebar.caption(f"直接评价人: {manager} | 分管高管: {vp}")
+    dept_display = " 丨 ".join(dept_parts) if dept_parts else "未获取"
+    st.sidebar.markdown(f"""
+        <div style="background-color: rgba(38, 39, 48, 0.8); padding: 15px; border-radius: 8px; border: 1px solid #333;">
+            <div style="margin-bottom: 10px; color: #b0b0b0; font-size: 14px;">{user_name} 丨 {emp_id}</div>
+            <div style="margin-bottom: 10px; color: #b0b0b0; font-size: 14px;">{dept_display}</div>
+            <div style="color: #b0b0b0; font-size: 14px;">{job_title} | {st.session_state.role}</div>
+        </div>
+        """, unsafe_allow_html=True)
     st.sidebar.markdown("---")
 
     is_evaluating_sub = (st.session_state.role == "管理者" and st.session_state.selected_subordinate_id is not None)
@@ -1684,8 +1721,14 @@ def main_app():
                             if st.button("✅ 确认提交打分", type="primary", use_container_width=True, disabled=not step2_can_submit):
                                 with st.spinner("正在提交并锁定该下属绩效..."):
                                     final_data = sub_update_data.copy()
-                                    final_data["上级评价是否完成"] = "是" 
-                                    
+                                    final_data["上级评价是否完成"] = "是"
+                                    # 一级部门负责人无法在一级部门环节调节自己，提交时直接写入一级部门调整考核结果=考核结果、一级部门调整完毕=是
+                                    dept_head_str = extract_text(sub_f.get("一级部门负责人") or sub_f.get("部门负责人"), "").strip()
+                                    is_dept_head_self = (disp_name in dept_head_str) or any(p.strip() == disp_name for p in dept_head_str.split(",") if p.strip())
+                                    if is_dept_head_self and current_grade in GRADE_OPTIONS:
+                                        final_data["一级部门调整考核结果"] = current_grade
+                                        final_data["一级部门调整完毕"] = "是"
+
                                     success, error_msg = update_record_safely(APP_TOKEN, TABLE_ID, st.session_state.selected_subordinate_id, final_data)
                                     if success:
                                         st.success(f"✅ 已成功提交！")
@@ -1757,7 +1800,7 @@ def main_app():
                             """,
                             unsafe_allow_html=True,
                         )
-                        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+                        st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
 
                         st.markdown("<div class='module-title'>👇 待调整名单</div>", unsafe_allow_html=True)
                         dept_msg_box = st.empty()
@@ -1871,9 +1914,9 @@ def main_app():
                                 time.sleep(0.6)
                                 st.rerun()
 
-                            # 表头：姓名(工号) / 部门(二-三-四)+岗位 / 自评等级 / 考核等级 / 调整等级
-                            # 取消「操作」列后，重新按 5 列分散对齐
-                            h1, h2, h3, h4, h5 = st.columns([2.4, 3.4, 1.2, 1.2, 1.6])
+                            # 表头：姓名(工号) / 部门(二-三-四)+岗位 / 自评等级 / 考核等级 / 调整等级（表头不断行，列间距适中）
+                            st.markdown("<div id='dept-adjust-table' style='display:none;'></div>", unsafe_allow_html=True)
+                            h1, h2, h3, h4, h5 = st.columns([1.8, 3.6, 1.3, 1.3, 1.6], gap="small")
                             h1.markdown("<div class='sub-list-head'>姓名（工号）</div>", unsafe_allow_html=True)
                             h2.markdown("<div class='sub-list-head'>子部门/岗位</div>", unsafe_allow_html=True)
                             h3.markdown("<div class='sub-list-head'>自评等级</div>", unsafe_allow_html=True)
@@ -1894,17 +1937,17 @@ def main_app():
                                 adj_grade_field = extract_text(f.get("一级部门调整考核结果", "")).strip()
                                 adj_grade_default = adj_grade_field if adj_grade_field in GRADE_OPTIONS else (mgr_grade if mgr_grade in GRADE_OPTIONS else "-")
 
-                                c1, c2, c3, c4, c5 = st.columns([2.4, 3.4, 1.2, 1.2, 1.6], vertical_alignment="center")
+                                c1, c2, c3, c4, c5 = st.columns([1.8, 3.6, 1.3, 1.3, 1.6], gap="small", vertical_alignment="center")
                                 c1.markdown(
-                                    f"<div class='sub-list-cell' style='color:#E0E0E0; white-space:normal;'><b>{name}</b><br>（{emp}）</div>",
+                                    f"<div class='sub-list-cell sub-list-cell-multiline' style='color:#E0E0E0; white-space:normal; text-align:center;'><b>{name}</b><br>（{emp}）</div>",
                                     unsafe_allow_html=True,
                                 )
                                 c2.markdown(
-                                    f"<div class='sub-list-cell' style='color:#b0b0b0; white-space:normal;' title='{dept_chain} | {job}'>{dept_chain}<br>{job}</div>",
+                                    f"<div class='sub-list-cell sub-list-cell-multiline' style='color:#b0b0b0; white-space:normal; text-align:center;' title='{dept_chain} | {job}'>{dept_chain}<br>{job}</div>",
                                     unsafe_allow_html=True,
                                 )
-                                c3.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0;'>{self_grade}</div>", unsafe_allow_html=True)
-                                c4.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0;'>{mgr_grade}</div>", unsafe_allow_html=True)
+                                c3.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center;'>{self_grade}</div>", unsafe_allow_html=True)
+                                c4.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center;'>{mgr_grade}</div>", unsafe_allow_html=True)
 
                                 # 调整等级下拉：与自评/上级评价一致，确认后不可修改，但已保存的调整等级必须展示
                                 done_flag = extract_text(f.get("一级部门调整完毕", "")).strip() == "是"
@@ -2069,10 +2112,12 @@ def main_app():
                                         r_id_all = rec.get("record_id")
                                         mgr_grade_all = extract_text(ff.get("考核结果", "-")).strip() or "-"
                                         dept_done_all = extract_text(ff.get("一级部门调整完毕", "")).strip() == "是"
-                                        if (mgr_grade_all not in GRADE_OPTIONS) or (not dept_done_all):
+                                        if not dept_done_all:
                                             continue
                                         adj_existing = extract_text(ff.get("分管高管调整考核结果", "")).strip()
-                                        default_grade = adj_existing if adj_existing in GRADE_OPTIONS else mgr_grade_all
+                                        dept_adj_all = extract_text(ff.get("一级部门调整考核结果", "")).strip()
+                                        dept_adj_all = dept_adj_all if dept_adj_all in GRADE_OPTIONS else mgr_grade_all
+                                        default_grade = adj_existing if adj_existing in GRADE_OPTIONS else (dept_adj_all if dept_adj_all in GRADE_OPTIONS else mgr_grade_all)
                                         selected_grade = st.session_state.get(f"vp_adj_grade_{r_id_all}", default_grade)
                                         if selected_grade not in GRADE_OPTIONS:
                                             selected_grade = default_grade
@@ -2094,13 +2139,15 @@ def main_app():
                                 time.sleep(0.6)
                                 st.rerun()
 
-                            # 表头与展示：与一级部门负责人一致
-                            h1, h2, h3, h4, h5 = st.columns([2.4, 3.4, 1.2, 1.2, 1.6])
+                            # 表头与展示：姓名(工号)、一级部门/岗位、自评等级、考核等级、调整等级①、调整等级②（分散居中对齐，表头不断行，列间距适中）
+                            st.markdown("<div id='vp-adjust-table' style='display:none;'></div>", unsafe_allow_html=True)
+                            h1, h2, h3, h4, h5, h6 = st.columns([1.8, 3.6, 1.3, 1.3, 1.3, 1.7], gap="small")
                             h1.markdown("<div class='sub-list-head'>姓名（工号）</div>", unsafe_allow_html=True)
                             h2.markdown("<div class='sub-list-head'>一级部门/岗位</div>", unsafe_allow_html=True)
                             h3.markdown("<div class='sub-list-head'>自评等级</div>", unsafe_allow_html=True)
                             h4.markdown("<div class='sub-list-head'>考核等级</div>", unsafe_allow_html=True)
-                            h5.markdown("<div class='sub-list-head' style='color:#66b2ff; font-weight:800;'>调整等级</div>", unsafe_allow_html=True)
+                            h5.markdown("<div class='sub-list-head'>调整等级Ⅰ<span style='cursor:help;font-size:12px;color:#b7bdc8;margin-left:2px;' title='一级部门调整考核结果'>ⓘ</span></div>", unsafe_allow_html=True)
+                            h6.markdown("<div class='sub-list-head' style='color:#66b2ff; font-weight:800;'>调整等级Ⅱ<span style='cursor:help;font-size:12px;color:#66b2ff;margin-left:2px;' title='分管高管调整考核结果'>ⓘ</span></div>", unsafe_allow_html=True)
                             st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
 
                             for rec in filtered_vp_records:
@@ -2110,28 +2157,35 @@ def main_app():
                                 emp = extract_text(f.get("工号") or f.get("员工工号"), "未知工号").strip()
                                 job = extract_text(f.get("岗位") or f.get("职位"), "未分配").strip()
                                 self_grade = extract_text(f.get("自评等级", "-")).strip() or "-"
-                                mgr_grade = extract_text(f.get("考核结果", "-")).strip() or "-"
+                                mgr_grade_raw = extract_text(f.get("考核结果", "-")).strip() or "-"
+                                mgr_done = extract_text(f.get("上级评价是否完成", "")).strip() == "是"
+                                # 1.1 考核等级：上级评价是否完成=是 时显示考核结果，否则 -
+                                mgr_grade_display = mgr_grade_raw if mgr_done and mgr_grade_raw in GRADE_OPTIONS else "-"
                                 vp_base_grade = extract_text(f.get("一级部门调整考核结果", "")).strip()
-                                adj_grade_field = extract_text(f.get("分管高管调整考核结果", "")).strip()
-                                # 分管高管：默认取分管高管调整结果；若为空取一级部门调整结果；再回退考核结果
-                                adj_grade_default = adj_grade_field if adj_grade_field in GRADE_OPTIONS else (vp_base_grade if vp_base_grade in GRADE_OPTIONS else (mgr_grade if mgr_grade in GRADE_OPTIONS else "-"))
-                                dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
+                                vp_base_grade = vp_base_grade if vp_base_grade in GRADE_OPTIONS else "-"
                                 dept_done = extract_text(f.get("一级部门调整完毕", "")).strip() == "是"
+                                # 1.2 调整等级①：一级部门调整完毕=是 时显示一级部门调整考核结果（一级部门负责人在上级评分提交时已自动写入）
+                                adj1_display = vp_base_grade if dept_done else "-"
+                                adj_grade_field = extract_text(f.get("分管高管调整考核结果", "")).strip()
+                                # 1.3 调整等级②：默认一级部门调整考核结果，可编辑，已改标记
+                                adj_grade_default = adj_grade_field if adj_grade_field in GRADE_OPTIONS else (vp_base_grade if vp_base_grade in GRADE_OPTIONS else "-")
+                                dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
                                 vp_done = extract_text(f.get("分管高管调整完毕", "")).strip() == "是"
 
-                                c1, c2, c3, c4, c5 = st.columns([2.4, 3.4, 1.2, 1.2, 1.6], vertical_alignment="center")
+                                c1, c2, c3, c4, c5, c6 = st.columns([1.8, 3.6, 1.3, 1.3, 1.3, 1.7], gap="small", vertical_alignment="center")
                                 c1.markdown(
-                                    f"<div class='sub-list-cell' style='color:#E0E0E0; white-space:normal;'><b>{name}</b><br>（{emp}）</div>",
+                                    f"<div class='sub-list-cell sub-list-cell-multiline' style='color:#E0E0E0; white-space:normal; text-align:center;'><b>{name}</b><br>（{emp}）</div>",
                                     unsafe_allow_html=True,
                                 )
                                 c2.markdown(
-                                    f"<div class='sub-list-cell' style='color:#b0b0b0; white-space:normal;' title='{dept_l1} | {job}'>{dept_l1}<br>{job}</div>",
+                                    f"<div class='sub-list-cell sub-list-cell-multiline' style='color:#b0b0b0; white-space:normal; text-align:center;' title='{dept_l1} | {job}'>{dept_l1}<br>{job}</div>",
                                     unsafe_allow_html=True,
                                 )
-                                c3.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0;'>{self_grade}</div>", unsafe_allow_html=True)
-                                c4.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0;'>{mgr_grade}</div>", unsafe_allow_html=True)
+                                c3.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center;'>{self_grade}</div>", unsafe_allow_html=True)
+                                c4.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center;'>{mgr_grade_display}</div>", unsafe_allow_html=True)
+                                c5.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center;'>{adj1_display}</div>", unsafe_allow_html=True)
 
-                                disable_adjust = (mgr_grade not in GRADE_OPTIONS) or (not dept_done) or vp_done
+                                disable_adjust = (not dept_done) or vp_done
                                 adjust_options = GRADE_OPTIONS + ["-"]
                                 if disable_adjust:
                                     if vp_done and adj_grade_default in adjust_options:
@@ -2140,13 +2194,13 @@ def main_app():
                                         init_idx = adjust_options.index("-")
                                 else:
                                     try:
-                                        init_idx = adjust_options.index(adj_grade_default) if adj_grade_default in adjust_options else adjust_options.index(vp_base_grade if vp_base_grade in GRADE_OPTIONS else mgr_grade)
+                                        fallback = vp_base_grade if vp_base_grade in GRADE_OPTIONS else mgr_grade_raw if mgr_grade_raw in GRADE_OPTIONS else "-"
+                                        init_idx = adjust_options.index(adj_grade_default) if adj_grade_default in adjust_options else adjust_options.index(fallback)
                                     except ValueError:
                                         init_idx = 0
-                                vp_compare = vp_base_grade if vp_base_grade in GRADE_OPTIONS else mgr_grade
-                                is_modified = (adj_grade_default in GRADE_OPTIONS and vp_compare in GRADE_OPTIONS and adj_grade_default != vp_compare)
-                                c5_inner1, c5_inner2 = c5.columns([4, 1], vertical_alignment="center")
-                                with c5_inner1:
+                                is_modified = (adj_grade_default in GRADE_OPTIONS and vp_base_grade in GRADE_OPTIONS and adj_grade_default != vp_base_grade)
+                                c6_inner1, c6_inner2 = c6.columns([4, 1], vertical_alignment="center")
+                                with c6_inner1:
                                     new_grade = st.selectbox(
                                         "选择等级",
                                         options=adjust_options,
@@ -2155,9 +2209,9 @@ def main_app():
                                         disabled=disable_adjust,
                                         label_visibility="collapsed",
                                     )
-                                with c5_inner2:
+                                with c6_inner2:
                                     if is_modified:
-                                        st.markdown("<div style='color:#1E90FF;font-size:12px;font-weight:700;line-height:38px;white-space:nowrap;' title='考核等级与调整等级不一致'>已改</div>", unsafe_allow_html=True)
+                                        st.markdown("<div style='color:#1E90FF;font-size:12px;font-weight:700;line-height:38px;white-space:nowrap;' title='调整等级Ⅱ与调整等级Ⅰ不一致'>已改</div>", unsafe_allow_html=True)
                                 # 选中等级即自动写入「分管高管调整考核结果」（仅当用户实际修改时保存）
                                 if (not disable_adjust) and (new_grade in GRADE_OPTIONS) and (new_grade != adj_grade_default):
                                     ok, msg = update_record_safely(
@@ -2322,18 +2376,22 @@ def main_app():
                             # 简化版：非调整权限管理者
                             st.markdown("<div class='module-title'>🧭 绩效等级分布</div>", unsafe_allow_html=True)
                             simple_grade_df = pd.DataFrame([{"等级": g, "人数": grade_counts.get(g, 0)} for g in ["S", "A", "B+", "B", "B-", "C"]])
+                            _max_cnt = max(grade_counts.values(), default=0) if grade_counts else 0
+                            _y_max = max(1, _max_cnt + 1)
+                            _y_values = list(range(0, _y_max + 1))
                             simple_grade_chart = (
                                 alt.Chart(simple_grade_df)
                                 .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
                                 .encode(
                                     x=alt.X("等级:N", sort=["S", "A", "B+", "B", "B-", "C"]),
-                                    y=alt.Y("人数:Q", axis=alt.Axis(format="d", tickMinStep=1)),
+                                    y=alt.Y("人数:Q", scale=alt.Scale(domain=[0, _y_max]), axis=alt.Axis(format="d", values=_y_values, title="人数")),
                                     tooltip=[alt.Tooltip("等级:N"), alt.Tooltip("人数:Q", format="d")],
-                                    color=alt.Color("等级:N", legend=None, scale=alt.Scale(domain=["S", "A", "B+", "B", "B-", "C"], range=["#4CAFEE", "#4CAFEE", "#8BC34A", "#90A4AE", "#FFC107", "#F44336"]))
+                                    color=alt.Color("等级:N", legend=None, scale=alt.Scale(domain=["S", "A", "B+", "B", "B-", "C"], range=GRADE_CHART_COLORS))
                                 )
                             )
                             st.altair_chart(simple_grade_chart, use_container_width=True)
 
+                            st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
                             st.markdown("<div class='module-title'>📈 考核进度统计</div>", unsafe_allow_html=True)
                             p1 = target_set_cnt / total_cnt if total_cnt else 0
                             p2 = self_done_cnt / total_cnt if total_cnt else 0
@@ -2350,16 +2408,35 @@ def main_app():
                                 """,
                                 unsafe_allow_html=True,
                             )
-                            st.progress(p1)
-                            st.progress(p2)
-                            st.progress(p3)
+                            progress_df = pd.DataFrame([
+                                {"阶段": "目标设定", "完成率": round(p1 * 100, 1), "已完成": target_set_cnt, "总数": total_cnt},
+                                {"阶段": "自我评价", "完成率": round(p2 * 100, 1), "已完成": self_done_cnt, "总数": total_cnt},
+                                {"阶段": "上级评价", "完成率": round(p3 * 100, 1), "已完成": mgr_done_cnt, "总数": total_cnt},
+                            ])
+                            progress_chart = (
+                                alt.Chart(progress_df)
+                                .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
+                                .encode(
+                                    y=alt.Y("阶段:N", sort=["目标设定", "自我评价", "上级评价"], axis=alt.Axis(title="阶段")),
+                                    x=alt.X("完成率:Q", scale=alt.Scale(domain=[0, 100]), axis=alt.Axis(title="完成率 (%)")),
+                                    color=alt.Color("阶段:N", legend=None, scale=alt.Scale(
+                                        domain=["目标设定", "自我评价", "上级评价"],
+                                        range=["#5B9BD5", "#70AD47", "#5BB5D5"],
+                                    )),
+                                    tooltip=[alt.Tooltip("阶段:N"), alt.Tooltip("已完成:Q", format="d"), alt.Tooltip("总数:Q", format="d"), alt.Tooltip("完成率:Q", format=".1f", title="完成率(%)")],
+                                )
+                                .properties(height=140)
+                            )
+                            st.altair_chart(progress_chart, use_container_width=True)
 
+                            st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
                             st.markdown("<div class='module-title'>🧾 部门绩效详情</div>", unsafe_allow_html=True)
                             dept_rows = []
                             for dept_name, dval in sorted(dept_stats.items(), key=lambda x: x[0]):
                                 total_d = dval["total"]
                                 done = dval["done"]
-                                rate = f"{round(done / total_d * 100, 1) if total_d else 0}%"
+                                rate_val = round(done / total_d * 100, 1) if total_d else 0
+                                rate = "100%" if rate_val == 100 else f"{rate_val}%"
                                 dept_rows.append({
                                     "部门": dept_name,
                                     "总人数": total_d,
@@ -2379,6 +2456,7 @@ def main_app():
                         else:
                             # 有调整权限的管理者：一级部门负责人/分管高管统一同一套报表视图
                             st.markdown("<div class='module-title'>📊 绩效概览</div>", unsafe_allow_html=True)
+                            st.info("💡 提示：此人数不含部门负责人，所有人数向下取整。")
                             completion_rate = 0 if total_cnt == 0 else round(mgr_done_cnt / total_cnt * 100, 1)
                             kpi1, kpi2, kpi3, kpi4 = st.columns(4)
                             drill_mode = st.session_state.get("report_member_kpi_drill", "all")
@@ -2414,6 +2492,8 @@ def main_app():
                             report_bonus = [r for r in report_records if extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "是"]
                             base_cnt = len(report_bonus) if report_bonus else total_cnt
                             grade_counts_bonus = Counter()
+                            # 分管高管：预计算各部门的上限/实际人数，用于部门筛选展示
+                            dept_grade_stats = {}  # dept -> {base_cnt, grade_counts, sa_theory, bp_theory, ...}
                             for rec in (report_bonus if report_bonus else report_records):
                                 f = rec.get("fields", {})
                                 vp_adj = extract_text(f.get("分管高管调整考核结果", ""), "").strip()
@@ -2426,6 +2506,41 @@ def main_app():
                                         break
                                 if final_grade in GRADE_OPTIONS:
                                     grade_counts_bonus[final_grade] += 1
+                            if is_vp:
+                                for rec in report_records:
+                                    rf = rec.get("fields", {})
+                                    dept_l1 = _clean_dept_name(rf.get("一级部门")) or "未分配部门"
+                                    vp_adj = extract_text(rf.get("分管高管调整考核结果", ""), "").strip()
+                                    dept_adj = extract_text(rf.get("一级部门调整考核结果", ""), "").strip()
+                                    mgr_grade = extract_text(rf.get("考核结果", ""), "").strip()
+                                    fg = "-"
+                                    for cand in [vp_adj, dept_adj, mgr_grade]:
+                                        if cand in GRADE_OPTIONS:
+                                            fg = cand
+                                            break
+                                    dg = dept_grade_stats.setdefault(dept_l1, {"grade_counts": Counter(), "bonus_cnt": 0, "total_cnt": 0})
+                                    dg["total_cnt"] += 1
+                                    if extract_text(rf.get("是否绩效关联奖金"), "").strip() == "是":
+                                        dg["bonus_cnt"] += 1
+                                    if fg in GRADE_OPTIONS:
+                                        dg["grade_counts"][fg] += 1
+                                for dept_name, dg in dept_grade_stats.items():
+                                    dg["base_cnt"] = dg["bonus_cnt"] if dg["bonus_cnt"] > 0 else dg["total_cnt"]
+                                    if dg["base_cnt"] == 0:
+                                        dg["base_cnt"] = 1
+                                    bmc = dg["grade_counts"].get("B-", 0) + dg["grade_counts"].get("C", 0)
+                                    dg["sa_theory"] = math.floor(dg["base_cnt"] * 0.20)
+                                    bp_base = math.floor(dg["base_cnt"] * 0.15)
+                                    bp_cap = math.floor(dg["base_cnt"] * 0.25)
+                                    dg["bp_theory"] = min(bp_cap, bp_base + bmc)
+                                    dg["sapb_theory"] = dg["sa_theory"] + dg["bp_theory"]
+                                    dg["actual_sa"] = dg["grade_counts"].get("S", 0) + dg["grade_counts"].get("A", 0)
+                                    dg["actual_bp"] = dg["grade_counts"].get("B+", 0)
+                                    dg["actual_sapb"] = dg["actual_sa"] + dg["actual_bp"]
+                                    dg["actual_b"] = dg["grade_counts"].get("B", 0)
+                                    dg["actual_bm"] = dg["grade_counts"].get("B-", 0)
+                                    dg["actual_c"] = dg["grade_counts"].get("C", 0)
+                                    dg["actual_sum"] = dg["actual_sa"] + dg["actual_bp"] + dg["actual_b"] + dg["actual_bm"] + dg["actual_c"]
                             # 计算逻辑：S/A 20%向下取整；B+ 默认15%，每多一个B-/C可多一个B+，最高25%，向下取整；B 剔除S/A/B+/B-/C
                             bmc_actual = grade_counts_bonus.get("B-", 0) + grade_counts_bonus.get("C", 0)
                             sa_theory = math.floor(base_cnt * 0.20)
@@ -2440,7 +2555,7 @@ def main_app():
                             actual_bm = grade_counts_bonus.get("B-", 0)
                             actual_c = grade_counts_bonus.get("C", 0)
                             actual_sum = actual_sa + actual_bp + actual_b + actual_bm + actual_c
-                            _cell_style = "font-size:16px;font-weight:700;"
+                            _cell_style = "font-size:14px;font-weight:700;white-space:nowrap;"
                             def _td(val, color):
                                 return f"<td style='text-align:center;color:{color};{_cell_style}'>{val}</td>"
                             def _td_with_hint(val, color, hint_text):
@@ -2479,6 +2594,7 @@ def main_app():
                             )
                             table_html = f"""
                             <div style='overflow-x:auto;'>
+                            <div style='font-size:16px;color:#66b2ff;margin-bottom:8px;font-weight:800;'>分管范围总数</div>
                             <table style='width:100%;border-collapse:collapse;text-align:center;'>
                             <thead><tr style='border-bottom:1px solid rgba(255,255,255,0.2);'>{header_cells}</tr></thead>
                             <tbody>
@@ -2489,7 +2605,65 @@ def main_app():
                             </div>
                             """
                             st.markdown(table_html, unsafe_allow_html=True)
-                            st.info("💡 提示：此人数不含部门负责人，所有人数向下取整。")
+
+                            if is_vp and dept_grade_stats:
+                                st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
+                                dept_options_sorted = sorted(dept_grade_stats.keys())
+                                _f1, _f2 = st.columns([1, 1])
+                                with _f1:
+                                    sel_dept = st.selectbox(
+                                        "选择分管一级部门",
+                                        options=["全部分管范围"] + dept_options_sorted,
+                                        key="report_perf_dept_filter",
+                                        label_visibility="collapsed",
+                                    )
+                                with _f2:
+                                    st.markdown(
+                                        "<div style='background:rgba(2,119,189,0.15);border:1px solid rgba(2,119,189,0.4);border-radius:6px;padding:8px 12px;font-size:13px;color:#66b2ff;'>💡 提示：选择分管一级部门</div>",
+                                        unsafe_allow_html=True,
+                                    )
+                                if sel_dept and sel_dept != "全部分管范围":
+                                    dg = dept_grade_stats[sel_dept]
+                                    _cell_style = "font-size:14px;font-weight:700;white-space:nowrap;"
+                                    def _td_d(val, color):
+                                        return f"<td style='text-align:center;color:{color};{_cell_style}'>{val}</td>"
+                                    def _td_label_d(txt):
+                                        return f"<td style='text-align:center;color:#b7bdc8;{_cell_style}'>{txt}</td>"
+                                    def _td_colspan_d(val, color, colspan=1):
+                                        return f"<td style='text-align:center;color:{color};{_cell_style}' colspan='{colspan}'>{val}</td>"
+                                    header_cells_d = _th("级别") + _th("S/A级别") + _th("B+级别") + _th("B+及以上级别") + _th("B级别") + _th("B-级别") + _th("C级别") + _th("SUM (人)")
+                                    theory_cells_d = (
+                                        _td_label_d("部门上限人数")
+                                        + _td_d(dg["sa_theory"], _neutral)
+                                        + _td_with_hint(dg["bp_theory"], _neutral, bp_hint)
+                                        + _td_d(dg["sapb_theory"], _neutral)
+                                        + _td_text("剔除绩优/差", _neutral)
+                                        + _td_colspan_d("按实际评价", _neutral, colspan=2)
+                                        + _td_d(dg["base_cnt"], _neutral)
+                                    )
+                                    actual_cells_d = (
+                                        _td_label_d("部门实际人数")
+                                        + _td_d(dg["actual_sa"], "#4CAFEE")
+                                        + _td_d(dg["actual_bp"], "#8BC34A")
+                                        + _td_d(dg["actual_sapb"], "#00BCD4")
+                                        + _td_d(dg["actual_b"], "#90A4AE")
+                                        + _td_d(dg["actual_bm"], "#FFC107")
+                                        + _td_d(dg["actual_c"], "#F44336")
+                                        + _td_d(dg["actual_sum"], "#b7bdc8")
+                                    )
+                                    table_dept_html = f"""
+                                    <div style='overflow-x:auto; margin-top:12px;'>
+                                    <div style='font-size:16px;color:#66b2ff;margin-bottom:8px;font-weight:800;'>各分管部门总数：{sel_dept}</div>
+                                    <table style='width:100%;border-collapse:collapse;text-align:center;'>
+                                    <thead><tr style='border-bottom:1px solid rgba(255,255,255,0.2);'>{header_cells_d}</tr></thead>
+                                    <tbody>
+                                    <tr style='border-bottom:1px solid rgba(255,255,255,0.1);'>{theory_cells_d}</tr>
+                                    <tr>{actual_cells_d}</tr>
+                                    </tbody>
+                                    </table>
+                                    </div>
+                                    """
+                                    st.markdown(table_dept_html, unsafe_allow_html=True)
 
                             export_rows = []
                             for m in member_cards:
@@ -2510,7 +2684,7 @@ def main_app():
                                 writer.writerows(export_rows)
                             csv_bytes = csv_buffer.getvalue().encode("utf-8-sig")
 
-                            st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
+                            st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
                             # 团队成员筛选与分页控制合并为同一行
                             pending_dept_drill = st.session_state.get("report_member_dept_pending", "")
                             if pending_dept_drill:
@@ -2619,7 +2793,7 @@ def main_app():
                                     unsafe_allow_html=True,
                                 )
 
-                            st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
+                            st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
                             st.markdown("<div class='module-title'>📈 绩效视图</div>", unsafe_allow_html=True)
                             chart_l, chart_r = st.columns(2)
                             with chart_l:
@@ -2639,7 +2813,7 @@ def main_app():
                                             "等级显示:N",
                                             scale=alt.Scale(
                                                 domain=domain_display,
-                                                range=["#4CAFEE", "#4CAFEE", "#8BC34A", "#90A4AE", "#FFC107", "#F44336"],
+                                                range=GRADE_CHART_COLORS,
                                             ),
                                         ),
                                         tooltip=[alt.Tooltip("等级:N"), alt.Tooltip("人数:Q", format="d")],
@@ -2677,13 +2851,14 @@ def main_app():
                                 ).properties(height=320)
                                 st.altair_chart(dept_bar, use_container_width=True)
 
-                            st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
+                            st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
                             st.markdown("<div class='module-title'>🧾 部门绩效详情</div>", unsafe_allow_html=True)
                             dept_rows = []
                             for dept_name, dval in sorted(dept_stats.items(), key=lambda x: x[0]):
                                 total_d = dval["total"]
                                 done = dval["done"]
-                                rate = f"{round(done / total_d * 100, 1) if total_d else 0}%"
+                                rate_val = round(done / total_d * 100, 1) if total_d else 0
+                                rate = "100%" if rate_val == 100 else f"{rate_val}%"
                                 dept_rows.append({
                                     "部门": dept_name,
                                     "总人数": total_d,
@@ -2744,6 +2919,7 @@ def main_app():
             unsafe_allow_html=True,
         )
 
+        st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
         st.markdown("<div class='module-title'>✍️ 上一次绩效考核评语</div>", unsafe_allow_html=True)
         st.info(last_comment)
 
