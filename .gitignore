@@ -22,3 +22,6 @@ demo_users.json
 !demo_users.example.json
 demo_users_hr.json
 !demo_users_hr.example.json
+
+# 克隆的公司仓库目录
+xqps/
