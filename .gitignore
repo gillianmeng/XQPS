@@ -20,3 +20,5 @@ v1-new_app.py
 feishu_bitable.py
 demo_users.json
 !demo_users.example.json
+demo_users_hr.json
+!demo_users_hr.example.json

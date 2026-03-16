@@ -220,12 +220,16 @@ def calculate_grade(score):
     elif score >= 2.5: return "B-"
     else: return "C"
 
-def load_demo_users():
+def load_demo_users(demo_dept=None):
     """
-    读取本地 demo 用户配置，优先 demo_users.json，
-    不存在则回退 demo_users.example.json。
+    读取本地 demo 用户配置。
+    demo_dept: None 或 "rd" -> 研发质量保障部 (demo_users.json)
+    demo_dept: "hr" -> 人力资源部 (demo_users_hr.json)
     """
-    candidate_files = ["demo_users.json", "demo_users.example.json"]
+    if demo_dept == "hr":
+        candidate_files = ["demo_users_hr.json", "demo_users_hr.example.json"]
+    else:
+        candidate_files = ["demo_users.json", "demo_users.example.json"]
     raw_users = []
     for f in candidate_files:
         if not os.path.exists(f):
@@ -270,10 +274,25 @@ def load_demo_users():
 
 # --- 登录页面逻辑 ---
 def login_page():
+    demo_dept = st.query_params.get("demo_dept", "").strip() or None  # "hr"=人力资源部
+    is_demo_entry = st.query_params.get("demo_entry") == "1"
+    show_demo_only = is_demo_entry and ENABLE_DEMO_LOGIN and not IS_PROD
+
+    if is_demo_entry and not (ENABLE_DEMO_LOGIN and not IS_PROD):
+        st.header("🎯 绩效管理系统")
+        st.warning("⚠️ 演示入口未开启。请设置 ENABLE_DEMO_LOGIN=true 且 APP_ENV≠production 后使用。")
+        st.link_button("← 返回登录页", "?", use_container_width=True)
+        return
+
     st.header("🎯 绩效管理系统 - 内部开发版")
 
-    st.markdown("### 🔐 飞书账号正式登录")
-    if "code" in st.query_params:
+    if show_demo_only:
+        dept_label = "人力资源部" if demo_dept == "hr" else "研发质量保障部"
+        st.markdown("### 🎬 演示测试入口")
+        st.caption(f"选择真实员工账号进行演示登录（{dept_label}）")
+    else:
+        st.markdown("### 🔐 飞书账号正式登录")
+    if "code" in st.query_params and not show_demo_only:
         code = st.query_params["code"]
         with st.spinner("正在验证飞书身份..."):
             user_data, error_msg = get_feishu_user(code)
@@ -288,18 +307,19 @@ def login_page():
                 if st.button("🔄 清除失效 Code 并重新登录", key="btn_clear_code"):
                     st.query_params.clear()
                     st.rerun()
-    else:
+    elif not show_demo_only:
         encoded_uri = urllib.parse.quote(REDIRECT_URI)
         base_url = "https://open.feishu.cn/open-apis/authen/v1/user_auth_page_beta"
         params = f"?app_id={APP_ID}&redirect_uri={encoded_uri}&state=testing"
         st.info("请使用您的企业飞书账号授权登录")
         st.link_button("🔗 飞书一键授权登录 (正式入口)", base_url + params)
 
-    # 演示入口默认关闭，仅开发环境手动开启
+    # 演示入口：demo_entry=1 时仅展示此块；否则在飞书登录下方展示
     if ENABLE_DEMO_LOGIN and not IS_PROD:
-        st.markdown("---")
-        st.markdown("### 🛠️ 演示与测试通道")
-        demo_users = load_demo_users()
+        if not show_demo_only:
+            st.markdown("---")
+            st.markdown("### 🛠️ 演示与测试通道")
+        demo_users = load_demo_users(demo_dept)
         mgr_users = [u for u in demo_users if u["role"] == "管理者"]
         emp_users = [u for u in demo_users if u["role"] == "员工"]
         col1, col2 = st.columns(2)
@@ -340,7 +360,13 @@ def login_page():
                 st.caption("未配置员工测试账号")
 
         if not demo_users:
-            st.info("💡 提示：未读取到 demo_users.json，可参考 demo_users.example.json 创建本地测试账号。")
+            if demo_dept == "hr":
+                st.info("💡 提示：未读取到 demo_users_hr.json，可运行 `python3 get_open_ids.py 人力资源部` 生成。")
+            else:
+                st.info("💡 提示：未读取到 demo_users.json，可参考 demo_users.example.json 创建本地测试账号。")
+        if show_demo_only:
+            st.markdown("---")
+            st.link_button("← 返回正式登录入口", "?", use_container_width=True)
 
 def jump_to_subordinate(sub_id):
     st.session_state.selected_subordinate_id = sub_id

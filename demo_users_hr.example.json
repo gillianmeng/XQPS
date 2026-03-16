@@ -1,0 +1,20 @@
+{
+  "users": [
+    {
+      "label": "人力资源部-管理者示例 (工号: XQxxxx)",
+      "name": "示例姓名",
+      "open_id": "ou_xxxxxxxxxxxxxxxxxxxxxxxx",
+      "emp_id": "XQxxxx",
+      "job_title": "HRBP",
+      "role": "管理者"
+    },
+    {
+      "label": "人力资源部-员工示例 (工号: XQyyyy)",
+      "name": "示例姓名",
+      "open_id": "ou_yyyyyyyyyyyyyyyyyyyyyyyy",
+      "emp_id": "XQyyyy",
+      "job_title": "HR专员",
+      "role": "员工"
+    }
+  ]
+}
