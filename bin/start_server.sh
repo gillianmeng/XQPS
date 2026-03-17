@@ -14,4 +14,4 @@ echo "人力资源部演示: http://localhost:$PORT/?demo_entry=1&demo_dept=hr"
 echo "研发质量部演示:  http://localhost:$PORT/?demo_entry=1"
 echo ""
 
-APP_ENV="$APP_ENV" ENABLE_DEMO_LOGIN="$ENABLE_DEMO_LOGIN" streamlit run new_app.py --server.port "$PORT"
+APP_ENV="$APP_ENV" ENABLE_DEMO_LOGIN="$ENABLE_DEMO_LOGIN" /data/conda/envs/py310/bin/python -m streamlit run new_app.py --server.address 0.0.0.0 --server.port "$PORT"
