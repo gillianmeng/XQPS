@@ -1,0 +1,355 @@
+{
+  "users": [
+    {
+      "label": "罗程轶（分管高管测试）",
+      "name": "罗程轶",
+      "open_id": "ou_c446946beddef9086590c5cff03a8b30",
+      "emp_id": "XQ1261",
+      "job_title": "分管高管",
+      "role": "管理者",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "吴昊 (工号: XQ117)",
+      "name": "吴昊",
+      "open_id": "ou_294d69ac5530a045d68a582e2582193a",
+      "emp_id": "XQ117",
+      "job_title": "高级测试开发专家",
+      "role": "管理者",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "褚玮 (工号: XQ1187)",
+      "name": "褚玮",
+      "open_id": "ou_ea000e246d8ecb5e5ae84d7f9e6b6cff",
+      "emp_id": "XQ1187",
+      "job_title": "测试开发专家",
+      "role": "管理者",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "姜东野 (工号: XQ1748)",
+      "name": "姜东野",
+      "open_id": "ou_5d4d707081a100324407e0dd059e6e4f",
+      "emp_id": "XQ1748",
+      "job_title": "测试开发专家",
+      "role": "管理者",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "王建国 (工号: XQ445)",
+      "name": "王建国",
+      "open_id": "ou_aa3bd7f7835736950dd6c4337b9a610c",
+      "emp_id": "XQ445",
+      "job_title": "测试开发专家",
+      "role": "管理者",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "纪佳邠 (工号: XQ493)",
+      "name": "纪佳邠",
+      "open_id": "ou_e017c4514f018d0c061f3748df8fc544",
+      "emp_id": "XQ493",
+      "job_title": "资深测试开发工程师",
+      "role": "管理者",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "赵修婷 (工号: XQ776)",
+      "name": "赵修婷",
+      "open_id": "ou_a147afe60f46713e9c312a05d3899659",
+      "emp_id": "XQ776",
+      "job_title": "测试开发专家",
+      "role": "管理者",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "乔凤荣 (工号: XQ1207)",
+      "name": "乔凤荣",
+      "open_id": "ou_31c8f8956421616d236360e44dddf0a7",
+      "emp_id": "XQ1207",
+      "job_title": "测试开发专家",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "罗娜 (工号: XQ1230)",
+      "name": "罗娜",
+      "open_id": "ou_c4988381eab6fd349e36e5df2148b23d",
+      "emp_id": "XQ1230",
+      "job_title": "高级测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "马旭琴 (工号: XQ1246)",
+      "name": "马旭琴",
+      "open_id": "ou_cb95bc04b0599d3d50cc3ea5b9841dc6",
+      "emp_id": "XQ1246",
+      "job_title": "资深测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "蔡吴琼 (工号: XQ1254)",
+      "name": "蔡吴琼",
+      "open_id": "ou_e28c68d940ba6a263529afb220fb44c7",
+      "emp_id": "XQ1254",
+      "job_title": "资深测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "王叶青 (工号: XQ1315)",
+      "name": "王叶青",
+      "open_id": "ou_ee98c41a351f2b96f3ed83dedb01c31e",
+      "emp_id": "XQ1315",
+      "job_title": "测试开发专家",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "冉英颖 (工号: XQ1353)",
+      "name": "冉英颖",
+      "open_id": "ou_9439a8f041649993e64ac97287e36d68",
+      "emp_id": "XQ1353",
+      "job_title": "高级测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "邱姚丽 (工号: XQ1354)",
+      "name": "邱姚丽",
+      "open_id": "ou_d98a1d71c985b19376a4c86b5c445ec1",
+      "emp_id": "XQ1354",
+      "job_title": "资深测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "吴雪敏 (工号: XQ1411)",
+      "name": "吴雪敏",
+      "open_id": "ou_a190a5b97d73532af7361c09d7864b7e",
+      "emp_id": "XQ1411",
+      "job_title": "资深测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "刘玉杰 (工号: XQ1586)",
+      "name": "刘玉杰",
+      "open_id": "ou_26a8c198ba2f0ce090e94204592c4fcf",
+      "emp_id": "XQ1586",
+      "job_title": "资深测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "金翠 (工号: XQ1805)",
+      "name": "金翠",
+      "open_id": "ou_92cd9770d8eb1a69b9f5077c57c55643",
+      "emp_id": "XQ1805",
+      "job_title": "资深测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "黄珊珊 (工号: XQ1850)",
+      "name": "黄珊珊",
+      "open_id": "ou_661b93a832f638c2b47a3dd245f54114",
+      "emp_id": "XQ1850",
+      "job_title": "高级测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "李兴杰 (工号: XQ2061)",
+      "name": "李兴杰",
+      "open_id": "ou_d61187bdebaf28c0219abf5e639694d5",
+      "emp_id": "XQ2061",
+      "job_title": "高级测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "刘鹤 (工号: XQ2168)",
+      "name": "刘鹤",
+      "open_id": "ou_68eaba4870c60eea71274425f79b212c",
+      "emp_id": "XQ2168",
+      "job_title": "高级测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "尹梦璠 (工号: XQ2174)",
+      "name": "尹梦璠",
+      "open_id": "ou_acb1e73ad4342924b01e0cc441948549",
+      "emp_id": "XQ2174",
+      "job_title": "高级测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "吴月峰 (工号: XQ2196)",
+      "name": "吴月峰",
+      "open_id": "ou_d95e37213c06316995873324f2b7538c",
+      "emp_id": "XQ2196",
+      "job_title": "高级测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "曾武 (工号: XQ2316)",
+      "name": "曾武",
+      "open_id": "ou_7814740f3748b5ed614900b3f0018332",
+      "emp_id": "XQ2316",
+      "job_title": "测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "匡梦瑶 (工号: XQ2325)",
+      "name": "匡梦瑶",
+      "open_id": "ou_f91c9355ce2d201421a15443a5d0a7a6",
+      "emp_id": "XQ2325",
+      "job_title": "测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "卢玥 (工号: XQ2358)",
+      "name": "卢玥",
+      "open_id": "ou_ad2c96174ae2aba43803c78861f4b8d1",
+      "emp_id": "XQ2358",
+      "job_title": "测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "杨城 (工号: XQ2368)",
+      "name": "杨城",
+      "open_id": "ou_fa1e9d99aa706c67ff2f2a062ede7c08",
+      "emp_id": "XQ2368",
+      "job_title": "测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "孙悦悦 (工号: XQ2411)",
+      "name": "孙悦悦",
+      "open_id": "ou_d99832bb91e61f2d9f0ad65a1ec38ea7",
+      "emp_id": "XQ2411",
+      "job_title": "测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "王玥瑶 (工号: XQ2413)",
+      "name": "王玥瑶",
+      "open_id": "ou_8118a4f6af64a566351eb205d20e292e",
+      "emp_id": "XQ2413",
+      "job_title": "测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "段欣瑞 (工号: XQ2418)",
+      "name": "段欣瑞",
+      "open_id": "ou_1cfa4113cc28e7d4a14a57e7b4f3de53",
+      "emp_id": "XQ2418",
+      "job_title": "测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "唐佳颖 (工号: XQ2438)",
+      "name": "唐佳颖",
+      "open_id": "ou_1593382a0b2843e27bb13f2921914472",
+      "emp_id": "XQ2438",
+      "job_title": "测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "杨双 (工号: XQ314)",
+      "name": "杨双",
+      "open_id": "ou_6df2f29ac1b6811e7a8ac380334ed570",
+      "emp_id": "XQ314",
+      "job_title": "测试开发专家",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "周漫漫 (工号: XQ393)",
+      "name": "周漫漫",
+      "open_id": "ou_832a9cace031ddf79cff271677f24dc2",
+      "emp_id": "XQ393",
+      "job_title": "资深测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "王鹏 (工号: XQ416)",
+      "name": "王鹏",
+      "open_id": "ou_735bf9b5dadc2660e2f3d8b5cbc884ec",
+      "emp_id": "XQ416",
+      "job_title": "测试开发专家",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "李旭 (工号: XQ440)",
+      "name": "李旭",
+      "open_id": "ou_42d18e8cb8cd82639d7f91cab1fbd846",
+      "emp_id": "XQ440",
+      "job_title": "测试开发专家",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "米仙 (工号: XQ453)",
+      "name": "米仙",
+      "open_id": "ou_ae69dbac69dfe1ddab4b6fc96f07f38c",
+      "emp_id": "XQ453",
+      "job_title": "测试开发专家",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "赵丽思 (工号: XQ566)",
+      "name": "赵丽思",
+      "open_id": "ou_c6579c3c9252f3f6d6db178febc873db",
+      "emp_id": "XQ566",
+      "job_title": "资深测试开发开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "魏文 (工号: XQ730)",
+      "name": "魏文",
+      "open_id": "ou_fc252b5cc248120884d8aed39c50c70d",
+      "emp_id": "XQ730",
+      "job_title": "高级测试开发工程师",
+      "role": "员工",
+      "test_env": "研发质量部"
+    },
+    {
+      "label": "资产管理部-分管高管（测试）",
+      "name": "资产管理部高管",
+      "open_id": "ou_demo_asset_vp_001",
+      "emp_id": "DEMO_ASSET_VP",
+      "job_title": "分管高管",
+      "role": "管理者",
+      "test_env": "资产管理部与金融运营部"
+    },
+    {
+      "label": "金融运营部-一级部门负责人（测试）",
+      "name": "金融运营部负责人",
+      "open_id": "ou_demo_finance_ops_001",
+      "emp_id": "DEMO_FIN_OPS",
+      "job_title": "一级部门负责人",
+      "role": "管理者",
+      "test_env": "资产管理部与金融运营部"
+    }
+  ]
+}
