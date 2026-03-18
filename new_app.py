@@ -283,7 +283,7 @@ def login_page():
     st.header("🎯 绩效管理系统 - 内部开发版")
 
     if show_demo_only:
-        dept_label = "人力资源部" if demo_dept == "hr" else "研发质量保障部"
+        dept_label = {"hr": "人力资源部"}.get(demo_dept, "研发质量保障部")
         st.markdown("### 🎬 演示测试入口")
         st.caption(f"选择真实员工账号进行演示登录（{dept_label}）")
     else:
@@ -1251,8 +1251,11 @@ def main_app():
         tab_list.append("📊 视图与报表")  # 原「公司审批」，先作为视图与报表占位
         tab_list.append("📂 团队历史绩效")
     else:
-        # 员工个人只看两个标签
-        tab_list = ["📝 员工自评", "📂 团队历史绩效"]
+        # 员工：显示自评+历史绩效；员工个人：仅显示自评，不显示团队历史绩效
+        if role_from_record == "员工个人":
+            tab_list = ["📝 员工自评"]
+        else:
+            tab_list = ["📝 员工自评", "📂 团队历史绩效"]
 
     tabs = st.tabs(tab_list)
     idx_self = 0
@@ -1322,34 +1325,33 @@ def main_app():
             col_comp_left, col_comp_right = st.columns([3, 1])
             with col_comp_left:
                 st.text_area(
-                    "结合考核期工作实际情况，从「思考、行动、写作、成长」四个维度总结",
+                    "通用能力总结",
                     height=110,
                     disabled=is_submitted,
                     key="comp_summary",
-                    placeholder=hint_placeholder,
+                    placeholder="结合考核期工作实际情况，从「思考、行动、协作、成长」四个维度总结",
                 )
             with col_comp_right: st.selectbox("通用能力自评得分", options=SCORE_OPTIONS, disabled=is_submitted, key="comp_score")
         elif st.session_state.role == "管理者":
             st.info("💡 提示：通用能力占比 20%、领导力占比 20%")
-            col_cap_left, col_cap_right = st.columns(2)
-            with col_cap_left:
-                st.text_area(
-                    "结合考核期工作实际情况，从「思考、行动、写作、成长」四个维度总结",
-                    height=110,
-                    disabled=is_submitted,
-                    key="comp_summary",
-                    placeholder=hint_placeholder,
-                )
-                st.selectbox("通用能力自评得分", options=SCORE_OPTIONS, disabled=is_submitted, key="comp_score")
-            with col_cap_right:
-                st.text_area(
-                    "请结合考核周期工作实际情况，从「领导力」维度进行阐述与总结",
-                    height=110,
-                    disabled=is_submitted,
-                    key="lead_summary",
-                    placeholder=hint_placeholder,
-                )
-                st.selectbox("领导力自评得分", options=SCORE_OPTIONS, disabled=is_submitted, key="lead_score")
+            # 管理者：通用能力与领导力上下排列展示
+            st.text_area(
+                "通用能力总结",
+                height=110,
+                disabled=is_submitted,
+                key="comp_summary",
+                placeholder="结合考核期工作实际情况，从「思考、行动、协作、成长」四个维度总结",
+            )
+            st.selectbox("通用能力自评得分", options=SCORE_OPTIONS, disabled=is_submitted, key="comp_score")
+            st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+            st.text_area(
+                "领导力总结",
+                height=110,
+                disabled=is_submitted,
+                key="lead_summary",
+                placeholder="请结合考核周期工作实际情况，从「领导力」维度进行阐述与总结",
+            )
+            st.selectbox("领导力自评得分", options=SCORE_OPTIONS, disabled=is_submitted, key="lead_score")
                 
         if not is_submitted:
             st.markdown("---")
@@ -3348,151 +3350,152 @@ def main_app():
                             d2.download_button("📘 导出Excel(兼容)", data=csv_bytes, file_name="绩效报表.xls", mime="application/vnd.ms-excel", use_container_width=True)
 
     # ==========================================
-    # 🟢 模块 3：历史信息 (所有人可见，索引永远是列表最后一个)
+    # 🟢 模块 3：历史信息 (员工个人不显示)
     # 管理者：展示所有下属的绩效等级列表；员工：展示个人历史绩效
     # ==========================================
-    with tabs[-1]:
-        if st.session_state.role == "管理者":
-            # 管理者：下属历史绩效等级列表，范围与视图报表一致
-            history_records_all = all_records_snapshot or fetch_all_records_safely(APP_TOKEN, TABLE_ID)
-            if not history_records_all:
-                st.info("💡 提示：暂无可用于历史档案的数据。")
-            else:
-                # 分管高管：需排除其他分管高管，只展示非分管高管员工
-                vp_names_set = set()
-                if is_vp:
-                    for r in history_records_all:
-                        vp_str = extract_text(r.get("fields", {}).get("分管高管") or r.get("fields", {}).get("高管"), "").strip()
-                        for part in vp_str.replace("，", ",").replace("；", ",").split(","):
-                            n = part.strip()
-                            if n:
-                                vp_names_set.add(n)
-
-                history_scoped = []
-                for rec in history_records_all:
-                    rf = rec.get("fields", {})
-                    emp_name = extract_text(rf.get("姓名"), "").strip()
-                    if user_name and emp_name == user_name:
-                        continue
-                    if is_vp:
-                        vp_str = extract_text(rf.get("分管高管") or rf.get("高管"), "").strip()
-                        if user_name in vp_str and emp_name not in vp_names_set:
-                            history_scoped.append(rec)
-                    elif is_dept_head:
-                        dept_head_str = extract_text(rf.get("一级部门负责人") or rf.get("部门负责人"), "").strip()
-                        if user_name in dept_head_str:
-                            history_scoped.append(rec)
-                    else:
-                        rec_manager = extract_text(rf.get("直接评价人") or rf.get("评价人"), "").strip()
-                        if user_name in rec_manager:
-                            history_scoped.append(rec)
-
-                if not history_scoped:
-                    st.info("💡 提示：您暂无下属，无历史绩效档案可查看。")
+    if "📂 团队历史绩效" in tab_list:
+        with tabs[tab_list.index("📂 团队历史绩效")]:
+            if st.session_state.role == "管理者":
+                # 管理者：下属历史绩效等级列表，范围与视图报表一致
+                history_records_all = all_records_snapshot or fetch_all_records_safely(APP_TOKEN, TABLE_ID)
+                if not history_records_all:
+                    st.info("💡 提示：暂无可用于历史档案的数据。")
                 else:
-                    _grade_colors = {"S": "#4CAFEE", "A": "#4CAFEE", "B+": "#8BC34A", "B": "#90A4AE", "B-": "#FFC107", "C": "#F44336"}
-                    st.markdown("<div class='module-title'>👇 下属历史绩效等级</div>", unsafe_allow_html=True)
+                    # 分管高管：需排除其他分管高管，只展示非分管高管员工
+                    vp_names_set = set()
+                    if is_vp:
+                        for r in history_records_all:
+                            vp_str = extract_text(r.get("fields", {}).get("分管高管") or r.get("fields", {}).get("高管"), "").strip()
+                            for part in vp_str.replace("，", ",").replace("；", ",").split(","):
+                                n = part.strip()
+                                if n:
+                                    vp_names_set.add(n)
 
-                    # 筛选框：工号姓名 / 部门 / 考核等级（分管高管用一级部门，其他用二级-三级-四级链路）
-                    history_dept_options = set()
-                    for rec in history_scoped:
-                        ff = rec.get("fields", {})
+                    history_scoped = []
+                    for rec in history_records_all:
+                        rf = rec.get("fields", {})
+                        emp_name = extract_text(rf.get("姓名"), "").strip()
+                        if user_name and emp_name == user_name:
+                            continue
                         if is_vp:
-                            _d1 = _clean_dept_name(ff.get("一级部门"))
-                            if _d1:
-                                history_dept_options.add(_d1)
+                            vp_str = extract_text(rf.get("分管高管") or rf.get("高管"), "").strip()
+                            if user_name in vp_str and emp_name not in vp_names_set:
+                                history_scoped.append(rec)
+                        elif is_dept_head:
+                            dept_head_str = extract_text(rf.get("一级部门负责人") or rf.get("部门负责人"), "").strip()
+                            if user_name in dept_head_str:
+                                history_scoped.append(rec)
                         else:
-                            _chain = build_dept_chain(ff)
-                            _d1 = _clean_dept_name(ff.get("一级部门"))
-                            if _chain:
-                                history_dept_options.add(_chain)
-                            elif _d1:
-                                history_dept_options.add(_d1)
-                    history_dept_options = sorted(history_dept_options)
-
-                    # 筛选框与「直属」按钮同一行
-                    if "history_filter_mode" not in st.session_state:
-                        st.session_state.history_filter_mode = "all"
-                    n_cols = 4 if (is_vp or is_dept_head) else 3
-                    cols = st.columns([1, 2, 1, 0.8] if n_cols == 4 else [1, 2, 1], gap="small")
-                    q_name_emp = cols[0].text_input("搜索工号、姓名", placeholder="🔎 搜索工号、姓名", key="history_filter_name_emp", label_visibility="collapsed")
-                    q_dept = cols[1].selectbox("部门", ["全部部门"] + history_dept_options, key="history_filter_dept", label_visibility="collapsed")
-                    q_grade = cols[2].selectbox("考核等级", ["全部考核等级"] + GRADE_OPTIONS + ["-", "暂无"], key="history_filter_grade", label_visibility="collapsed")
-                    if is_vp or is_dept_head:
-                        if cols[3].button("直属", key="history_btn_direct", use_container_width=True):
-                            st.session_state.history_filter_mode = "all" if st.session_state.history_filter_mode == "direct" else "direct"
-                            st.rerun()
-
-                    # 筛选模式：全部 / 直属
-                    history_to_filter = history_scoped
-                    mode = st.session_state.get("history_filter_mode", "all")
-                    if (is_vp or is_dept_head) and mode == "direct":
-                        history_to_filter = []
-                        for rec in history_scoped:
-                            rf = rec.get("fields", {})
                             rec_manager = extract_text(rf.get("直接评价人") or rf.get("评价人"), "").strip()
-                            if user_name and user_name in rec_manager:
-                                history_to_filter.append(rec)
+                            if user_name in rec_manager:
+                                history_scoped.append(rec)
 
-                    filtered_history = []
-                    q1 = q_name_emp.strip().lower()
-                    for rec in history_to_filter:
-                        f = rec.get("fields", {})
-                        name = extract_text(f.get("姓名"), "").strip()
-                        emp = extract_text(f.get("工号") or f.get("员工工号"), "").strip()
-                        dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
-                        dept_chain = build_dept_chain(f) or dept_l1
-                        rec_dept = dept_l1 if is_vp else dept_chain
-                        last_result = extract_text(f.get("上一次绩效考核结果", "暂无"), "").strip() or "暂无"
+                    if not history_scoped:
+                        st.info("💡 提示：您暂无下属，无历史绩效档案可查看。")
+                    else:
+                        _grade_colors = {"S": "#4CAFEE", "A": "#4CAFEE", "B+": "#8BC34A", "B": "#90A4AE", "B-": "#FFC107", "C": "#F44336"}
+                        st.markdown("<div class='module-title'>👇 下属历史绩效等级</div>", unsafe_allow_html=True)
 
-                        if q1 and (q1 not in name.lower() and q1 not in emp.lower()):
-                            continue
-                        if q_dept != "全部部门" and rec_dept != q_dept and not (rec_dept or "").startswith(q_dept + "-"):
-                            continue
-                        if q_grade != "全部考核等级" and last_result != q_grade:
-                            continue
-                        filtered_history.append(rec)
+                        # 筛选框：工号姓名 / 部门 / 考核等级（分管高管用一级部门，其他用二级-三级-四级链路）
+                        history_dept_options = set()
+                        for rec in history_scoped:
+                            ff = rec.get("fields", {})
+                            if is_vp:
+                                _d1 = _clean_dept_name(ff.get("一级部门"))
+                                if _d1:
+                                    history_dept_options.add(_d1)
+                            else:
+                                _chain = build_dept_chain(ff)
+                                _d1 = _clean_dept_name(ff.get("一级部门"))
+                                if _chain:
+                                    history_dept_options.add(_chain)
+                                elif _d1:
+                                    history_dept_options.add(_d1)
+                        history_dept_options = sorted(history_dept_options)
 
-                    if (is_vp or is_dept_head) and mode == "direct":
-                        st.caption("📌 当前显示：直属")
-                    st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
+                        # 筛选框与「直属」按钮同一行
+                        if "history_filter_mode" not in st.session_state:
+                            st.session_state.history_filter_mode = "all"
+                        n_cols = 4 if (is_vp or is_dept_head) else 3
+                        cols = st.columns([1, 2, 1, 0.8] if n_cols == 4 else [1, 2, 1], gap="small")
+                        q_name_emp = cols[0].text_input("搜索工号、姓名", placeholder="🔎 搜索工号、姓名", key="history_filter_name_emp", label_visibility="collapsed")
+                        q_dept = cols[1].selectbox("部门", ["全部部门"] + history_dept_options, key="history_filter_dept", label_visibility="collapsed")
+                        q_grade = cols[2].selectbox("考核等级", ["全部考核等级"] + GRADE_OPTIONS + ["-", "暂无"], key="history_filter_grade", label_visibility="collapsed")
+                        if is_vp or is_dept_head:
+                            if cols[3].button("直属", key="history_btn_direct", use_container_width=True):
+                                st.session_state.history_filter_mode = "all" if st.session_state.history_filter_mode == "direct" else "direct"
+                                st.rerun()
 
-                    if not filtered_history:
-                        st.caption("当前筛选条件下暂无员工。")
-                    for rec in filtered_history:
-                        f = rec.get("fields", {})
-                        name = extract_text(f.get("姓名"), "未知姓名").strip()
-                        emp = extract_text(f.get("工号") or f.get("员工工号"), "未知工号").strip()
-                        job = extract_text(f.get("岗位") or f.get("职位"), "未分配").strip()
-                        dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
-                        dept_l2 = normalize_dept_text(f.get("二级部门"))
-                        dept_display = dept_l1 if is_vp else (dept_l2 or dept_l1)
-                        perf_cycle = extract_text(f.get("上一次绩效考核对应周期", "暂无"), "").strip() or "暂无"
-                        last_result = extract_text(f.get("上一次绩效考核结果", "暂无"), "").strip() or "暂无"
-                        res_color = _grade_colors.get(last_result, "#b7bdc8")
+                        # 筛选模式：全部 / 直属
+                        history_to_filter = history_scoped
+                        mode = st.session_state.get("history_filter_mode", "all")
+                        if (is_vp or is_dept_head) and mode == "direct":
+                            history_to_filter = []
+                            for rec in history_scoped:
+                                rf = rec.get("fields", {})
+                                rec_manager = extract_text(rf.get("直接评价人") or rf.get("评价人"), "").strip()
+                                if user_name and user_name in rec_manager:
+                                    history_to_filter.append(rec)
 
-                        c1, c2, c3, c4 = st.columns([1.8, 3.2, 2.0, 1.5], gap="small", vertical_alignment="center")
-                        c1.markdown(f"<div class='sub-list-cell' style='color:#E0E0E0; text-align:center;'><b>{name}</b>（{emp}）</div>", unsafe_allow_html=True)
-                        c2.markdown(f"<div class='sub-list-cell sub-list-cell-multiline' style='color:#b0b0b0; text-align:center;' title='{dept_display} | {job}'>{dept_display}<br>{job}</div>", unsafe_allow_html=True)
-                        c3.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center;'>{perf_cycle}</div>", unsafe_allow_html=True)
-                        c4.markdown(f"<div class='sub-list-cell' style='color:{res_color}; text-align:center; font-weight:700;'>{last_result}</div>", unsafe_allow_html=True)
+                        filtered_history = []
+                        q1 = q_name_emp.strip().lower()
+                        for rec in history_to_filter:
+                            f = rec.get("fields", {})
+                            name = extract_text(f.get("姓名"), "").strip()
+                            emp = extract_text(f.get("工号") or f.get("员工工号"), "").strip()
+                            dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
+                            dept_chain = build_dept_chain(f) or dept_l1
+                            rec_dept = dept_l1 if is_vp else dept_chain
+                            last_result = extract_text(f.get("上一次绩效考核结果", "暂无"), "").strip() or "暂无"
+
+                            if q1 and (q1 not in name.lower() and q1 not in emp.lower()):
+                                continue
+                            if q_dept != "全部部门" and rec_dept != q_dept and not (rec_dept or "").startswith(q_dept + "-"):
+                                continue
+                            if q_grade != "全部考核等级" and last_result != q_grade:
+                                continue
+                            filtered_history.append(rec)
+
+                        if (is_vp or is_dept_head) and mode == "direct":
+                            st.caption("📌 当前显示：直属")
                         st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
 
-        else:
-            # 员工：个人历史绩效
-            perf_cycle = extract_text(fields.get("上一次绩效考核对应周期", "暂无数据"))
-            last_perf_result = extract_text(fields.get("上一次绩效考核结果", "暂无数据"))
-            last_comment = extract_text(fields.get("上一次绩效考核评语", "暂无评语"))
-            _grade_colors = {"S": "#4CAFEE", "A": "#4CAFEE", "B+": "#8BC34A", "B": "#90A4AE", "B-": "#FFC107", "C": "#F44336"}
-            _res_color = _grade_colors.get(last_perf_result, "#b7bdc8")
+                        if not filtered_history:
+                            st.caption("当前筛选条件下暂无员工。")
+                        for rec in filtered_history:
+                            f = rec.get("fields", {})
+                            name = extract_text(f.get("姓名"), "未知姓名").strip()
+                            emp = extract_text(f.get("工号") or f.get("员工工号"), "未知工号").strip()
+                            job = extract_text(f.get("岗位") or f.get("职位"), "未分配").strip()
+                            dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
+                            dept_l2 = normalize_dept_text(f.get("二级部门"))
+                            dept_display = dept_l1 if is_vp else (dept_l2 or dept_l1)
+                            perf_cycle = extract_text(f.get("上一次绩效考核对应周期", "暂无"), "").strip() or "暂无"
+                            last_result = extract_text(f.get("上一次绩效考核结果", "暂无"), "").strip() or "暂无"
+                            res_color = _grade_colors.get(last_result, "#b7bdc8")
 
-            st.markdown(
-                f"""<div style="font-size: 16px; font-weight: 700; margin-bottom: 10px; padding: 10px; background-color: rgba(255,255,255,0.02); border-radius: 6px; border: 1px solid #444;"><div style="display:flex; justify-content:center; gap:18px; flex-wrap:wrap;"><span style="color:#b7bdc8;">上一次考核周期：<span style="color:#4CAFEE;">{perf_cycle}</span></span><span style="color:#b7bdc8;">上一次绩效结果：<span style="color:{_res_color};">{last_perf_result}</span></span></div></div>""",
-                unsafe_allow_html=True,
-            )
-            st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
-            st.markdown("<div class='module-title'>✍️ 上一次绩效考核评语</div>", unsafe_allow_html=True)
-            st.info(last_comment)
+                            c1, c2, c3, c4 = st.columns([1.8, 3.2, 2.0, 1.5], gap="small", vertical_alignment="center")
+                            c1.markdown(f"<div class='sub-list-cell' style='color:#E0E0E0; text-align:center;'><b>{name}</b>（{emp}）</div>", unsafe_allow_html=True)
+                            c2.markdown(f"<div class='sub-list-cell sub-list-cell-multiline' style='color:#b0b0b0; text-align:center;' title='{dept_display} | {job}'>{dept_display}<br>{job}</div>", unsafe_allow_html=True)
+                            c3.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center;'>{perf_cycle}</div>", unsafe_allow_html=True)
+                            c4.markdown(f"<div class='sub-list-cell' style='color:{res_color}; text-align:center; font-weight:700;'>{last_result}</div>", unsafe_allow_html=True)
+                            st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
+
+            else:
+                # 员工：个人历史绩效
+                perf_cycle = extract_text(fields.get("上一次绩效考核对应周期", "暂无数据"))
+                last_perf_result = extract_text(fields.get("上一次绩效考核结果", "暂无数据"))
+                last_comment = extract_text(fields.get("上一次绩效考核评语", "暂无评语"))
+                _grade_colors = {"S": "#4CAFEE", "A": "#4CAFEE", "B+": "#8BC34A", "B": "#90A4AE", "B-": "#FFC107", "C": "#F44336"}
+                _res_color = _grade_colors.get(last_perf_result, "#b7bdc8")
+
+                st.markdown(
+                    f"""<div style="font-size: 16px; font-weight: 700; margin-bottom: 10px; padding: 10px; background-color: rgba(255,255,255,0.02); border-radius: 6px; border: 1px solid #444;"><div style="display:flex; justify-content:center; gap:18px; flex-wrap:wrap;"><span style="color:#b7bdc8;">上一次考核周期：<span style="color:#4CAFEE;">{perf_cycle}</span></span><span style="color:#b7bdc8;">上一次绩效结果：<span style="color:{_res_color};">{last_perf_result}</span></span></div></div>""",
+                    unsafe_allow_html=True,
+                )
+                st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
+                st.markdown("<div class='module-title'>✍️ 上一次绩效考核评语</div>", unsafe_allow_html=True)
+                st.info(last_comment)
 
 if st.session_state.user_info is None:
     login_page()

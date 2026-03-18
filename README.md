@@ -80,14 +80,14 @@ python3 get_open_ids.py -l   # 列出所有一级部门
 XQPS/
 ├── new_app.py              # 主应用
 ├── demo_entry.py           # 研发质量部演示入口
-├── demo_entry_hr.py       # 人力资源部演示入口
+├── demo_entry_hr.py        # 人力资源部演示入口
 ├── get_open_ids.py        # 从飞书拉取员工 open_id 工具
 ├── run_demo.sh            # 演示环境启动脚本
 ├── requirements.txt
 ├── .streamlit/
 │   └── secrets.toml       # 密钥配置（勿提交）
-├── demo_users.json        # 研发质量部测试账号（勿提交）
-└── demo_users_hr.json     # 人力资源部测试账号（勿提交）
+├── demo_users.json         # 研发质量部测试账号（勿提交）
+└── demo_users_hr.json      # 人力资源部测试账号（勿提交）
 ```
 
 ## 部署说明

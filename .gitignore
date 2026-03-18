@@ -13,15 +13,15 @@ __pycache__/
 .DS_Store
 
 # Local debug and exploratory scripts (do not publish)
-!test_*.py
-!find_*.py
-!workbench.py
-!v1-new_app.py
-!feishu_bitable.py
-!demo_users.json
-demo_users.example.json
-!demo_users_hr.json
-demo_users_hr.example.json
+test_*.py
+find_*.py
+workbench.py
+v1-new_app.py
+feishu_bitable.py
+demo_users.json
+!demo_users.example.json
+demo_users_hr.json
+!demo_users_hr.example.json
 
 # 克隆的公司仓库目录
 xqps/
