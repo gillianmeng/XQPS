@@ -20,12 +20,9 @@ rsync -av --progress . "$TARGET_DIR" \
   --exclude=".env.*" \
   --exclude=".streamlit/secrets.toml" \
   --exclude="*.streamlit/*.local.toml" \
-  --exclude="demo_users.json" \
-  --exclude="demo_users_hr.json" \
   --exclude="xqps/*" \
   --exclude="backup/*" \
   --exclude="archived/*" \
-  --exclude="target" \
   --exclude="xqps.zip"
 
 # 打包 target 目录
