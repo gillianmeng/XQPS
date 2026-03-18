@@ -1,0 +1,4 @@
+# XQPS 主题配置：默认浅色，深色由应用内切换
+[theme]
+base = "dark"
+primaryColor = "#1E90FF"
