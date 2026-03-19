@@ -3,6 +3,7 @@ import requests
 import urllib.parse
 import time
 from collections import Counter
+from datetime import datetime
 import os
 import json
 import csv
@@ -1174,6 +1175,90 @@ def main_app():
         or extract_text(fields.get("本次绩效考核周期"), "").strip()
         or "2026上半年"
     )
+    # 公告用：考核周期（与侧边栏一致，取自绩效考核周期/考核周期/本次绩效考核周期）、自评提交截止日期
+    cycle_for_announce = current_cycle
+    deadline_raw = fields.get("自评提交截止日期")
+    deadline_display = ""
+    if deadline_raw is not None:
+        if isinstance(deadline_raw, (int, float)):
+            try:
+                ts = int(deadline_raw) / 1000 if deadline_raw > 1e12 else int(deadline_raw)
+                dt = datetime.fromtimestamp(ts)
+                deadline_display = dt.strftime("%Y年%m月%d日")
+            except Exception:
+                deadline_display = str(deadline_raw)
+        else:
+            s = extract_text(deadline_raw, "").strip()
+            if s:
+                for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+                    try:
+                        dt = datetime.strptime(s[:10], fmt)
+                        deadline_display = dt.strftime("%Y年%m月%d日")
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    deadline_display = s
+    if not deadline_display:
+        deadline_display = "截止日期"
+    # 上级评分公告用：上级评价提交截止日期
+    mgr_deadline_raw = fields.get("上级评价提交截止日期")
+    mgr_deadline_display = ""
+    if mgr_deadline_raw is not None:
+        if isinstance(mgr_deadline_raw, (int, float)):
+            try:
+                ts = int(mgr_deadline_raw) / 1000 if mgr_deadline_raw > 1e12 else int(mgr_deadline_raw)
+                dt = datetime.fromtimestamp(ts)
+                mgr_deadline_display = dt.strftime("%Y年%m月%d日")
+            except Exception:
+                mgr_deadline_display = str(mgr_deadline_raw)
+        else:
+            s = extract_text(mgr_deadline_raw, "").strip()
+            if s:
+                for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+                    try:
+                        dt = datetime.strptime(s[:10], fmt)
+                        mgr_deadline_display = dt.strftime("%Y年%m月%d日")
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    mgr_deadline_display = s
+    if not mgr_deadline_display:
+        mgr_deadline_display = "截止日期"
+    # 一级部门负责人/分管高管公告用
+    def _parse_deadline(raw, default="截止日期"):
+        if raw is None:
+            return default
+        if isinstance(raw, (int, float)):
+            try:
+                ts = int(raw) / 1000 if raw > 1e12 else int(raw)
+                dt = datetime.fromtimestamp(ts)
+                return dt.strftime("%Y年%m月%d日")
+            except Exception:
+                return str(raw)
+        s = extract_text(raw, "").strip()
+        if not s:
+            return default
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+            try:
+                dt = datetime.strptime(s[:10], fmt)
+                return dt.strftime("%Y年%m月%d日")
+            except ValueError:
+                continue
+        return s
+    def _get_deadline_from_fields(f, *keys):
+        for k in keys:
+            v = _parse_deadline(f.get(k), None)
+            if v and v != "截止日期":
+                return v
+        return "截止日期"
+    dept_head_deadline_display = _get_deadline_from_fields(
+        fields, "一级部门负责人提交截止日期", "部门负责人提交截止日期", "一级部门负责人截止日期"
+    )
+    vp_deadline_display = _get_deadline_from_fields(
+        fields, "分管高管提交截止日期", "高管提交截止日期", "分管高管截止日期"
+    )
     dept_parts = [d for d in [extract_text(fields.get(f'{k}级部门'), "") for k in ["一", "二", "三", "四"]] if d and d != "未获取"]
     department = "-".join(dept_parts) if dept_parts else "未获取"
     manager = extract_text(fields.get('直接评价人') or fields.get('评价人'))
@@ -1407,7 +1492,15 @@ def main_app():
                     time.sleep(1)
                     st.rerun()
     st.sidebar.markdown("### 📚 制度学习")
-    st.sidebar.link_button("雪球集团绩效管理制度 （2025版）", "https://xueqiu.feishu.cn/wiki/RL1OwdkJ9iQnRakIcj6cXKRSnfg", use_container_width=True)
+    st.sidebar.markdown("""
+    <div class="policy-learning-box" style="font-size: 11px;">
+        <div style="margin-bottom: 8px; padding: 6px 8px; border-radius: 4px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);">
+            <a href="https://xueqiu.feishu.cn/wiki/RL1OwdkJ9iQnRakIcj6cXKRSnfg" target="_blank" style="color: #81c784; text-decoration: none;">雪球集团绩效管理制度</a>
+        </div>
+        <div style="margin-bottom: 8px; padding: 6px 8px; border-radius: 4px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); color: #888;">雪球集团绩效管理实施细则</div>
+        <div style="padding: 6px 8px; border-radius: 4px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); color: #888;">绩效考核系统操作指引</div>
+    </div>
+    """, unsafe_allow_html=True)
     st.sidebar.markdown("---")
     if st.sidebar.button("🚪 退出登录", use_container_width=True):
         st.session_state.clear()
@@ -1455,6 +1548,14 @@ def main_app():
             st.session_state["ui_lead_score"] = float(l_score) if l_score else 0.0
         
         st.markdown("<div class='hero-title'>🎯 当前绩效目标设定与自评</div>", unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style="margin: 12px 0 16px 0; padding: 14px 16px; background: rgba(33, 150, 243, 0.12); border-radius: 8px; border-left: 4px solid #2196F3; font-size: 14px; line-height: 1.7; color: #E0E0E0;">
+            <div style="font-weight: 600; margin-bottom: 8px; color: #90CAF9;">📢 公告</div>
+            <div>亲爱的雪球er！</div>
+            <div>感谢您参与雪球绩效考核！</div>
+            <div>请秉承实事求是、客观公正的态度，对「<strong style="color:#FFD54F;">{cycle_for_announce}</strong>」工作目标复盘并对工作得失进行总结。自评前请仔细阅读左侧导航栏下方的「<strong style="color:#90CAF9;">📚 制度学习</strong>」模块，并在「<strong style="color:#FFD54F;">{deadline_display} 18:30</strong>」前提交自评。</div>
+        </div>
+        """, unsafe_allow_html=True)
         if is_submitted:
             st.success("🔒 您的自评已提交，当前表单不可修改。")
         
@@ -1602,7 +1703,30 @@ def main_app():
                         
                 unrated_subs = total_subs - rated_subs - drafted_subs
                 
+                # 截止日期：优先当前用户记录，否则从下属或全表记录中取（含备用列名）
+                _mgr_deadline = mgr_deadline_display
+                if _mgr_deadline == "截止日期":
+                    _mgr_keys = ("上级评价提交截止日期", "上级评分截止日期", "上级截止日期")
+                    for src in (my_all_subs, all_records_snapshot or []):
+                        for rec in src:
+                            f = rec.get("fields", {})
+                            for k in _mgr_keys:
+                                v = _parse_deadline(f.get(k), None)
+                                if v and v != "截止日期":
+                                    _mgr_deadline = v
+                                    break
+                            if _mgr_deadline != "截止日期":
+                                break
+                        if _mgr_deadline != "截止日期":
+                            break
 
+                # 上级评分公告
+                st.markdown(f"""
+                <div style="margin: 0 0 16px 0; padding: 14px 16px; background: rgba(33, 150, 243, 0.12); border-radius: 8px; border-left: 4px solid #2196F3; font-size: 14px; line-height: 1.7; color: #E0E0E0;">
+                    <div style="font-weight: 600; margin-bottom: 8px; color: #90CAF9;">📢 公告</div>
+                    <div>请于「<strong style="color:#FFD54F;">{_mgr_deadline} 18:30</strong>」前提交上级评分！</div>
+                </div>
+                """, unsafe_allow_html=True)
                 # 模块 1：下属评估进展（单列）- 样式参照实际人数表格：16px 粗体，标签灰 #b7bdc8，数字配色
                 st.markdown("<div class='module-title'>👥 下属评估进展</div>", unsafe_allow_html=True)
                 st.markdown(
@@ -1627,7 +1751,7 @@ def main_app():
                     st.info("💡 提示：当前暂无下属。")
                 else:
                     if st.session_state.pop("mgr_scroll_hint", False):
-                        st.info("💡提示：请向上滚动鼠标查看或评价下属哦~")
+                        st.info("💡提示：请滚动鼠标，在人员列表下方查看或评价下属哦~")
                     # 顶部筛选：与综合调整统一（工号姓名 / 部门 / 状态 / 考核等级）
                     f1, f2, f3, f4 = st.columns(4, gap="small")
                     q_name_emp = f1.text_input(
@@ -2072,6 +2196,26 @@ def main_app():
 
                             modified_cnt += 1
 
+                    # 截止日期：优先当前用户记录，否则从任意记录中取（含备用列名）
+                    _dh_deadline = dept_head_deadline_display
+                    if _dh_deadline == "截止日期":
+                        _dh_keys = ("一级部门负责人提交截止日期", "部门负责人提交截止日期", "一级部门负责人截止日期")
+                        for rec in all_records:
+                            f = rec.get("fields", {})
+                            for k in _dh_keys:
+                                v = _parse_deadline(f.get(k), None)
+                                if v and v != "截止日期":
+                                    _dh_deadline = v
+                                    break
+                            if _dh_deadline != "截止日期":
+                                break
+
+                    st.markdown(f"""
+                    <div style="margin: 0 0 16px 0; padding: 14px 16px; background: rgba(33, 150, 243, 0.12); border-radius: 8px; border-left: 4px solid #2196F3; font-size: 14px; line-height: 1.7; color: #E0E0E0;">
+                        <div style="font-weight: 600; margin-bottom: 8px; color: #90CAF9;">📢 公告</div>
+                        <div>请于「<strong style="color:#FFD54F;">{_dh_deadline} 18:30</strong>」前确定调整。</div>
+                    </div>
+                    """, unsafe_allow_html=True)
                     st.markdown("<div class='module-title'>📌 一级部门负责人调整进展</div>", unsafe_allow_html=True)
 
                     st.markdown(
@@ -2520,6 +2664,26 @@ def main_app():
 
                         modified_cnt += 1
 
+                # 截止日期：优先当前用户记录，否则从任意记录中取（含备用列名）
+                _vp_deadline = vp_deadline_display
+                if _vp_deadline == "截止日期":
+                    _vp_keys = ("分管高管提交截止日期", "高管提交截止日期", "分管高管截止日期")
+                    for rec in all_records:
+                        f = rec.get("fields", {})
+                        for k in _vp_keys:
+                            v = _parse_deadline(f.get(k), None)
+                            if v and v != "截止日期":
+                                _vp_deadline = v
+                                break
+                        if _vp_deadline != "截止日期":
+                            break
+
+                st.markdown(f"""
+                <div style="margin: 0 0 16px 0; padding: 14px 16px; background: rgba(33, 150, 243, 0.12); border-radius: 8px; border-left: 4px solid #2196F3; font-size: 14px; line-height: 1.7; color: #E0E0E0;">
+                    <div style="font-weight: 600; margin-bottom: 8px; color: #90CAF9;">📢 公告</div>
+                    <div>请于「<strong style="color:#FFD54F;">{_vp_deadline} 18:30</strong>」前确定调整。</div>
+                </div>
+                """, unsafe_allow_html=True)
                 st.markdown("<div class='module-title'>📌 分管高管调整进展</div>", unsafe_allow_html=True)
 
                 st.markdown(
@@ -3052,12 +3216,30 @@ def main_app():
                             if final_grade in GRADE_OPTIONS:
                                 grade_counts[final_grade] += 1
 
-                            dept_info = dept_stats.setdefault(dept, {"total": 0, "done": 0, "grades": {g: 0 for g in GRADE_OPTIONS}})
+                            _base = {"total": 0, "done": 0, "grades": {g: 0 for g in GRADE_OPTIONS}}
+                            dept_info = dept_stats.setdefault(dept, {
+                                **_base,
+                                "sales_total": 0, "sales_done": 0, "sales_grades": {g: 0 for g in GRADE_OPTIONS},
+                                "non_sales_total": 0, "non_sales_done": 0, "non_sales_grades": {g: 0 for g in GRADE_OPTIONS},
+                            })
                             dept_info["total"] += 1
                             if mgr_done:
                                 dept_info["done"] += 1
                             if final_grade in GRADE_OPTIONS:
                                 dept_info["grades"][final_grade] += 1
+                            is_sales = extract_text(f.get("是否绩效关联奖金"), "").strip() == "否"
+                            if is_sales:
+                                dept_info["sales_total"] += 1
+                                if mgr_done:
+                                    dept_info["sales_done"] += 1
+                                if final_grade in GRADE_OPTIONS:
+                                    dept_info["sales_grades"][final_grade] += 1
+                            else:
+                                dept_info["non_sales_total"] += 1
+                                if mgr_done:
+                                    dept_info["non_sales_done"] += 1
+                                if final_grade in GRADE_OPTIONS:
+                                    dept_info["non_sales_grades"][final_grade] += 1
 
                             # 最终状态统一为「已公示」
                             if public_done or dept_done:
@@ -3142,22 +3324,14 @@ def main_app():
                             st.markdown("<div class='module-title'>🧾 部门绩效详情</div>", unsafe_allow_html=True)
                             dept_rows = []
                             for dept_name, dval in sorted(dept_stats.items(), key=lambda x: x[0]):
-                                total_d = dval["total"]
-                                done = dval["done"]
-                                rate_val = round(done / total_d * 100, 1) if total_d else 0
-                                rate = "100%" if rate_val == 100 else f"{rate_val}%"
-                                dept_rows.append({
-                                    "部门": dept_name,
-                                    "总人数": total_d,
-                                    "已完成": done,
-                                    "完成率": rate,
-                                    "S级": dval["grades"]["S"],
-                                    "A级": dval["grades"]["A"],
-                                    "B+级": dval["grades"]["B+"],
-                                    "B级": dval["grades"]["B"],
-                                    "B-级": dval["grades"]["B-"],
-                                    "C级": dval["grades"]["C"],
-                                })
+                                def _row(dept, scope, t, d, g):
+                                    rv = round(d / t * 100, 1) if t else 0
+                                    return {"部门": dept, "口径": scope, "总人数": t, "已完成": d, "完成率": "100%" if rv == 100 else f"{rv}%", "S级": g["S"], "A级": g["A"], "B+级": g["B+"], "B级": g["B"], "B-级": g["B-"], "C级": g["C"]}
+                                dept_rows.append(_row(dept_name, "总", dval["total"], dval["done"], dval["grades"]))
+                                has_sales = (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0
+                                if has_sales:
+                                    dept_rows.append(_row(dept_name, "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"])))
+                                    dept_rows.append(_row(dept_name, "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"])))
                             dept_df = pd.DataFrame(dept_rows)
                             if not dept_df.empty:
                                 dept_df = dept_df.style.set_properties(**{"text-align": "center"})
@@ -3197,12 +3371,12 @@ def main_app():
                                 st.session_state.report_member_page = 1
                                 st.rerun()
 
-                            # 图二计算逻辑：人员基数=考核结果关联奖金的人员，比例向下取整
-                            report_bonus = [r for r in report_records if extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "是"]
-                            report_non_bonus = [r for r in report_records if extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "否"]
-                            has_bonus_no = len(report_non_bonus) > 0
-                            # 默认：无筛选时用销售（绩效关联奖金）口径；有筛选时由用户选择
-                            report_scope = report_bonus if report_bonus else report_records
+                            # 图二计算逻辑：是否绩效关联奖金=否→销售，=是→非销售；人员基数=该口径人数，比例向下取整
+                            report_sales = [r for r in report_records if extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "否"]
+                            report_non_sales = [r for r in report_records if extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "是"]
+                            has_bonus_no = len(report_sales) > 0 and len(report_non_sales) > 0
+                            # 默认：无筛选时用销售口径；有筛选时由用户选择
+                            report_scope = report_sales if report_sales else report_records
                             if is_vp and has_bonus_no:
                                 if "report_bonus_scope_filter" not in st.session_state:
                                     st.session_state.report_bonus_scope_filter = "全部"
@@ -3212,14 +3386,14 @@ def main_app():
                                     key="report_bonus_scope_filter",
                                     label_visibility="visible",
                                 )
-                                # 上下表统一使用同一筛选口径：全部=全部人数，销售=是，非销售=否
+                                # 上下表统一使用同一筛选口径：全部=全部人数，销售=否，非销售=是
                                 _scope_key = st.session_state.report_bonus_scope_filter
                                 if _scope_key == "全部":
                                     report_scope = report_records
                                 elif _scope_key == "销售":
-                                    report_scope = report_bonus
+                                    report_scope = report_sales
                                 else:
-                                    report_scope = report_non_bonus
+                                    report_scope = report_non_sales
                             base_cnt = len(report_scope) if report_scope else total_cnt
                             grade_counts_bonus = Counter()
                             # 分管高管：预计算各部门的上限/实际人数；有筛选时分别构建全部/销售/非销售三套，确保「全部分管范围」与单部门视图一致
@@ -3266,8 +3440,8 @@ def main_app():
                                 return dgs
                             if is_vp and has_bonus_no:
                                 _dept_stats_by_scope["全部"] = _build_dept_grade_stats(report_records, use_total_as_base=True)
-                                _dept_stats_by_scope["销售"] = _build_dept_grade_stats(report_bonus)
-                                _dept_stats_by_scope["非销售"] = _build_dept_grade_stats(report_non_bonus)
+                                _dept_stats_by_scope["销售"] = _build_dept_grade_stats(report_sales)
+                                _dept_stats_by_scope["非销售"] = _build_dept_grade_stats(report_non_sales)
                                 dept_grade_stats = _dept_stats_by_scope.get(st.session_state.get("report_bonus_scope_filter", "全部"), _dept_stats_by_scope["全部"])
                             for rec in (report_scope if report_scope else report_records):
                                 f = rec.get("fields", {})
@@ -3285,7 +3459,7 @@ def main_app():
                                 # 无筛选框时：从 report_scope 构建；无销售数据时用全部口径
                                 dept_grade_stats = _build_dept_grade_stats(
                                     report_scope if report_scope else report_records,
-                                    use_total_as_base=not report_bonus,
+                                    use_total_as_base=not report_sales,
                                 )
                             # 计算逻辑：S/A 20%向下取整；B+ 默认15%，每多一个B-/C可多一个B+，最高25%，向下取整；B 剔除S/A/B+/B-/C
                             bmc_actual = grade_counts_bonus.get("B-", 0) + grade_counts_bonus.get("C", 0)
@@ -3670,46 +3844,17 @@ def main_app():
                             st.markdown("<div class='module-title'>🧾 部门绩效详情</div>", unsafe_allow_html=True)
                             dept_rows = []
                             for dept_name, dval in sorted(dept_stats.items(), key=lambda x: x[0]):
-                                total_d = dval["total"]
-                                done = dval["done"]
-                                rate_val = round(done / total_d * 100, 1) if total_d else 0
-                                rate = "100%" if rate_val == 100 else f"{rate_val}%"
-                                dept_rows.append({
-                                    "部门": dept_name,
-                                    "总人数": total_d,
-                                    "已完成": done,
-                                    "完成率": rate,
-                                    "S级": dval["grades"]["S"],
-                                    "A级": dval["grades"]["A"],
-                                    "B+级": dval["grades"]["B+"],
-                                    "B级": dval["grades"]["B"],
-                                    "B-级": dval["grades"]["B-"],
-                                    "C级": dval["grades"]["C"],
-                                })
+                                def _row(dept, scope, t, d, g):
+                                    rv = round(d / t * 100, 1) if t else 0
+                                    return {"部门": dept, "口径": scope, "总人数": t, "已完成": d, "完成率": "100%" if rv == 100 else f"{rv}%", "S级": g["S"], "A级": g["A"], "B+级": g["B+"], "B级": g["B"], "B-级": g["B-"], "C级": g["C"]}
+                                dept_rows.append(_row(dept_name, "总", dval["total"], dval["done"], dval["grades"]))
+                                has_sales = (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0
+                                if has_sales:
+                                    dept_rows.append(_row(dept_name, "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"])))
+                                    dept_rows.append(_row(dept_name, "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"])))
                             dept_df = pd.DataFrame(dept_rows)
                             dept_df_display = dept_df.style.set_properties(**{"text-align": "center"}) if not dept_df.empty else dept_df
-                            st.caption("点击表格任意行（包含数字单元格）可下钻到团队成员")
-                            dept_select_event = st.dataframe(
-                                dept_df_display,
-                                use_container_width=True,
-                                hide_index=True,
-                                on_select="rerun",
-                                selection_mode="single-row",
-                                key="report_dept_table_drill",
-                            )
-                            selected_rows = (dept_select_event or {}).get("selection", {}).get("rows", [])
-                            if selected_rows:
-                                selected_idx = selected_rows[0]
-                                if 0 <= selected_idx < len(dept_df):
-                                    target_dept = str(dept_df.iloc[selected_idx]["部门"]).strip()
-                                    if target_dept and st.session_state.get("report_member_dept") != target_dept:
-                                        st.session_state.report_member_dept_pending = target_dept
-                                        st.rerun()
-
-                            st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
-                            d1, d2 = st.columns([1, 1])
-                            d1.download_button("📄 导出CSV", data=csv_bytes, file_name="绩效报表.csv", mime="text/csv", use_container_width=True)
-                            d2.download_button("📘 导出Excel(兼容)", data=csv_bytes, file_name="绩效报表.xls", mime="application/vnd.ms-excel", use_container_width=True)
+                            st.dataframe(dept_df_display, use_container_width=True, hide_index=True)
 
     # ==========================================
     # 🟢 模块 3：历史信息 (员工个人不显示)
