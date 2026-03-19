@@ -10,6 +10,11 @@ import io
 import math
 import pandas as pd
 import altair as alt
+try:
+    import qrcode
+    HAS_QRCODE = True
+except ImportError:
+    HAS_QRCODE = False
 
 # --- 配置区：严禁在代码中硬编码密钥 ---
 # 支持两种来源（优先级从高到低）：
@@ -216,19 +221,8 @@ def calculate_grade(score):
     elif score >= 2.5: return "B-"
     else: return "C"
 
-def load_demo_users(demo_dept=None):
-    """
-    读取本地 demo 用户配置。
-    demo_dept: None 或 "rd" -> 研发质量保障部 (demo_users.json)
-    demo_dept: "hr" -> 人力资源部 (demo_users_hr.json)
-    demo_dept: "wealth" -> 财富顾问部 (demo_users_wealth.json)
-    """
-    if demo_dept == "hr":
-        candidate_files = ["demo_users_hr.json", "demo_users_hr.example.json"]
-    elif demo_dept == "wealth":
-        candidate_files = ["demo_users_wealth.json", "demo_users_wealth.example.json"]
-    else:
-        candidate_files = ["demo_users.json", "demo_users.example.json"]
+def _load_demo_users_from_files(candidate_files):
+    """从指定文件列表中读取用户，返回解析后的 users 列表。"""
     raw_users = []
     for f in candidate_files:
         if not os.path.exists(f):
@@ -243,9 +237,43 @@ def load_demo_users(demo_dept=None):
             else:
                 raw_users = []
             if raw_users:
-                break
+                return raw_users
         except Exception:
-            raw_users = []
+            pass
+    return []
+
+def load_demo_users(demo_dept=None):
+    """
+    读取本地 demo 用户配置。
+    demo_dept: None 或 "all" -> 合并三个部门（人力资源部、研发质量保障部、财富顾问部）
+    demo_dept: "hr" -> 人力资源部 (demo_users_hr.json)
+    demo_dept: "wealth" -> 财富顾问部 (demo_users_wealth.json)
+    demo_dept: "rd" -> 研发质量保障部 (demo_users.json)
+    """
+    if demo_dept in (None, "", "all"):
+        # 合并三个部门：依次读取，按 open_id 去重
+        file_sets = [
+            ["demo_users_hr.json", "demo_users_hr.example.json"],
+            ["demo_users_wealth.json", "demo_users_wealth.example.json"],
+            ["demo_users.json", "demo_users.example.json"],
+        ]
+        seen_open_ids = set()
+        raw_users = []
+        for candidate_files in file_sets:
+            for item in _load_demo_users_from_files(candidate_files):
+                if isinstance(item, dict):
+                    oid = str(item.get("open_id", "")).strip()
+                    if oid and oid not in seen_open_ids:
+                        seen_open_ids.add(oid)
+                        raw_users.append(item)
+    else:
+        if demo_dept == "hr":
+            candidate_files = ["demo_users_hr.json", "demo_users_hr.example.json"]
+        elif demo_dept == "wealth":
+            candidate_files = ["demo_users_wealth.json", "demo_users_wealth.example.json"]
+        else:
+            candidate_files = ["demo_users.json", "demo_users.example.json"]
+        raw_users = _load_demo_users_from_files(candidate_files)
 
     users = []
     for item in raw_users:
@@ -286,7 +314,11 @@ def login_page():
     st.header("🎯 绩效管理系统 - 内部开发版")
 
     if show_demo_only:
-        dept_label = {"hr": "人力资源部", "wealth": "财富顾问部"}.get(demo_dept, "研发质量保障部")
+        dept_label = (
+            "人力资源部、研发质量保障部、财富顾问部"
+            if demo_dept in (None, "", "all")
+            else {"hr": "人力资源部", "wealth": "财富顾问部", "rd": "研发质量保障部"}.get(demo_dept, "研发质量保障部")
+        )
         st.markdown("### 🎬 演示测试入口")
         st.caption(f"选择真实员工账号进行演示登录（{dept_label}）")
     else:
@@ -309,9 +341,33 @@ def login_page():
     elif not show_demo_only:
         encoded_uri = urllib.parse.quote(REDIRECT_URI)
         base_url = "https://open.feishu.cn/open-apis/authen/v1/user_auth_page_beta"
-        params = f"?app_id={APP_ID}&redirect_uri={encoded_uri}&state=testing"
-        st.info("请使用您的企业飞书账号授权登录")
-        st.link_button("🔗 飞书一键授权登录 (正式入口)", base_url + params)
+        auth_url = base_url + f"?app_id={APP_ID}&redirect_uri={encoded_uri}&state=testing"
+        st.info("请使用飞书 App 扫码登录，或点击下方链接在浏览器中授权")
+        col_qr, col_tip = st.columns([1, 1])
+        with col_qr:
+            if HAS_QRCODE:
+                try:
+                    qr = qrcode.QRCode(version=1, box_size=4, border=2, error_correction=qrcode.constants.ERROR_CORRECT_M)
+                    qr.add_data(auth_url)
+                    qr.make(fit=True)
+                    img = qr.make_image(fill_color="#000000", back_color="white")
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG")
+                    buf.seek(0)
+                    st.image(buf, caption="扫码登录", width=160)
+                except Exception:
+                    st.caption("二维码生成失败，请使用下方链接登录")
+            else:
+                st.caption("安装 qrcode 后可显示扫码登录：`pip install qrcode pillow`")
+        with col_tip:
+            st.markdown("""
+            <div style="font-size:14px; color:#b0b0b0; line-height:1.8;">
+            <p>📱 打开飞书 App，扫描左侧二维码</p>
+            <p>✅ 授权后即可登录绩效系统</p>
+            <p>📋 考核表内员工均可登录</p>
+            </div>
+            """, unsafe_allow_html=True)
+            st.link_button("🔗 浏览器授权登录", auth_url, use_container_width=True)
 
     # 演示入口：demo_entry=1 时仅展示此块；否则在飞书登录下方展示
     if ENABLE_DEMO_LOGIN and not IS_PROD:
@@ -359,7 +415,9 @@ def login_page():
                 st.caption("未配置员工测试账号")
 
         if not demo_users:
-            if demo_dept == "hr":
+            if demo_dept in (None, "", "all"):
+                st.info("💡 提示：未读取到任一 demo 用户文件。可运行 `python3 get_open_ids.py 人力资源部`、`python3 get_open_ids.py 研发质量保障部`、`python3 get_open_ids.py 财富顾问部` 分别生成对应 JSON。")
+            elif demo_dept == "hr":
                 st.info("💡 提示：未读取到 demo_users_hr.json，可运行 `python3 get_open_ids.py 人力资源部` 生成。")
             elif demo_dept == "wealth":
                 st.info("💡 提示：未读取到 demo_users_wealth.json，可运行 `python3 get_open_ids.py 财富顾问部` 生成。")
@@ -506,7 +564,12 @@ def main_app():
         color: #81c784 !important;
         border: 1px solid #4caf50 !important;
     }
-    div.element-container:has(.save-marker) + div.element-container button:hover {
+    div.element-container:has(.save-marker) + div.element-container button:disabled {
+        background-color: #5a5a5a !important;
+        color: #9e9e9e !important;
+        border: 1px solid #4a4a4a !important;
+    }
+    div.element-container:has(.save-marker) + div.element-container button:not(:disabled):hover {
         background-color: rgba(46, 125, 50, 0.4) !important;
         color: #ffffff !important;
         border-color: #81c784 !important;
@@ -818,6 +881,23 @@ def main_app():
         background: #42A5F5 !important;
         color: #ffffff !important;
     }
+    /* 团队历史绩效「直属」按钮：蓝色 #4799e4，字体小两级 */
+    div.element-container:has(.history-direct-btn-marker) {
+        display: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    div.element-container:has(.history-direct-btn-marker) + div.element-container button {
+        background: #4799e4 !important;
+        color: #ffffff !important;
+        font-size: 11px !important;
+        font-weight: 500 !important;
+        min-height: 28px !important;
+        height: 28px !important;
+        padding: 4px 12px !important;
+        border-radius: 8px !important;
+        border: none !important;
+    }
     .mgr-sub-list div.element-container:has(.xqps-btn-evaluate) + div.element-container button {
         background: #26A69A !important;
         color: #ffffff !important;
@@ -1061,10 +1141,22 @@ def main_app():
                         st.session_state.data_initialized = True
                 else:
                     st.session_state.feishu_record_id = "NOT_FOUND"
-                    st.toast("⚠️ 未在飞书找到此ID的档案。", icon="⚠️")
             except Exception as e:
-                st.session_state.feishu_record_id = "NOT_FOUND"
+                st.session_state.feishu_record_id = "FETCH_ERROR"
                 st.error(f"⚠️ 连接飞书异常: {e}")
+
+    # 1.5 异常处理：不在考核表内 或 连接失败
+    if st.session_state.feishu_record_id == "NOT_FOUND":
+        st.info("💡 您不在本次考核期内，如有疑问请联系 HR。")
+        if st.button("🚪 退出登录", key="btn_logout_not_in_scope"):
+            st.session_state.clear()
+            st.rerun()
+        return
+    if st.session_state.feishu_record_id == "FETCH_ERROR":
+        if st.button("🔄 重试", key="btn_retry_fetch"):
+            st.session_state.feishu_record_id = None
+            st.rerun()
+        return
 
     # 2. 准备基础数据与个人计算
     fields = st.session_state.feishu_record
@@ -1314,6 +1406,9 @@ def main_app():
                     st.session_state.selected_subordinate_id = None
                     time.sleep(1)
                     st.rerun()
+    st.sidebar.markdown("### 📚 制度学习")
+    st.sidebar.link_button("雪球集团绩效管理制度 （2025版）", "https://xueqiu.feishu.cn/wiki/RL1OwdkJ9iQnRakIcj6cXKRSnfg", use_container_width=True)
+    st.sidebar.markdown("---")
     if st.sidebar.button("🚪 退出登录", use_container_width=True):
         st.session_state.clear()
         st.rerun()
@@ -1606,48 +1701,67 @@ def main_app():
                         st.caption("未找到匹配的下属")
 
                     # 确认提交与提示：与一级部门负责人/分管高管一致，放置在筛选框下方
+                    # 逻辑：全部直属已提交（上级评价是否完成=是）则不可再提交，确认按钮置灰
                     mgr_can_confirm_all = True
+                    mgr_incomplete_names = []
                     for _s in my_direct_subs:
                         _sf = _s.get("fields", {})
                         _done = extract_text(_sf.get("上级评价是否完成")).strip() == "是"
                         _grade = extract_text(_sf.get("考核结果")).strip()
+                        _name = extract_text(_sf.get("姓名"), "").strip()
                         if not _done and _grade not in GRADE_OPTIONS:
                             mgr_can_confirm_all = False
-                            break
+                            mgr_incomplete_names.append(_name or "未知")
+                        # 不 break，继续收集所有未完成者
+                    if my_direct_subs and all(extract_text(_s.get("fields", {}).get("上级评价是否完成")).strip() == "是" for _s in my_direct_subs):
+                        mgr_can_confirm_all = False  # 全部已提交，按钮置灰不可再提交
                     st.info("💡 提示：点击「确认提交」即意味着对全部下属的本次评估结束，不可再修改。")
+                    if not mgr_can_confirm_all and mgr_incomplete_names:
+                        st.warning(f"⚠️ 以下 {len(mgr_incomplete_names)} 人尚未完成评分并保存草稿，请先完成后再提交：{', '.join(mgr_incomplete_names[:5])}{'...' if len(mgr_incomplete_names) > 5 else ''}")
                     st.markdown("<div class='mgr-submit-marker'></div>", unsafe_allow_html=True)
                     if st.button("确认提交", type="primary", use_container_width=True, key="btn_mgr_confirm_all", disabled=not mgr_can_confirm_all):
-                        with st.spinner("正在提交并锁定全部下属绩效..."):
-                            submitted_cnt = 0
-                            err_msgs = []
-                            for sub in my_direct_subs:
-                                sf = sub.get("fields", {})
-                                rid = sub.get("record_id")
-                                mgr_done = extract_text(sf.get("上级评价是否完成")).strip() == "是"
-                                curr_grade = extract_text(sf.get("考核结果")).strip()
-                                if mgr_done or curr_grade not in GRADE_OPTIONS:
-                                    continue
-                                final_data = {"上级评价是否完成": "是"}
-                                sub_name = extract_text(sf.get("姓名"), "").strip()
-                                dept_head_str = extract_text(sf.get("一级部门负责人") or sf.get("部门负责人"), "").strip()
-                                is_dept_head_self = (sub_name in dept_head_str) or any(p.strip() == sub_name for p in dept_head_str.split(",") if p.strip())
-                                if is_dept_head_self and is_dept_head and curr_grade in GRADE_OPTIONS:
-                                    final_data["一级部门调整考核结果"] = curr_grade
-                                    final_data["一级部门调整完毕"] = "是"
-                                ok, err = update_record_safely(APP_TOKEN, TABLE_ID, rid, final_data)
-                                if ok:
-                                    submitted_cnt += 1
-                                else:
-                                    err_msgs.append(f"{sub_name}: {err}")
-                            if submitted_cnt > 0:
-                                st.success(f"✅ 已成功提交 {submitted_cnt} 人！")
-                                st.balloons()
-                                time.sleep(1.5)
-                                st.rerun()
-                            if err_msgs:
-                                st.error("❌ 部分提交失败：" + "; ".join(err_msgs[:3]))
-                            if submitted_cnt == 0 and not err_msgs:
-                                st.info("💡 当前暂无待提交的暂存评价。")
+                        # 二次校验：确保全部下属均有考核等级
+                        pre_check_fail = []
+                        for sub in my_direct_subs:
+                            sf = sub.get("fields", {})
+                            mgr_done = extract_text(sf.get("上级评价是否完成")).strip() == "是"
+                            curr_grade = extract_text(sf.get("考核结果")).strip()
+                            if not mgr_done and curr_grade not in GRADE_OPTIONS:
+                                pre_check_fail.append(extract_text(sf.get("姓名"), "").strip() or "未知")
+                        if pre_check_fail:
+                            st.error(f"❌ 以下人员尚未完成评分并保存草稿，无法提交：{', '.join(pre_check_fail[:5])}{'...' if len(pre_check_fail) > 5 else ''}")
+                        else:
+                            with st.spinner("正在提交并锁定全部下属绩效..."):
+                                submitted_cnt = 0
+                                err_msgs = []
+                                for sub in my_direct_subs:
+                                    sf = sub.get("fields", {})
+                                    rid = sub.get("record_id")
+                                    mgr_done = extract_text(sf.get("上级评价是否完成")).strip() == "是"
+                                    curr_grade = extract_text(sf.get("考核结果")).strip()
+                                    if mgr_done or curr_grade not in GRADE_OPTIONS:
+                                        continue
+                                    final_data = {"上级评价是否完成": "是"}
+                                    sub_name = extract_text(sf.get("姓名"), "").strip()
+                                    dept_head_str = extract_text(sf.get("一级部门负责人") or sf.get("部门负责人"), "").strip()
+                                    is_dept_head_self = (sub_name in dept_head_str) or any(p.strip() == sub_name for p in dept_head_str.split(",") if p.strip())
+                                    if is_dept_head_self and is_dept_head and curr_grade in GRADE_OPTIONS:
+                                        final_data["一级部门调整考核结果"] = curr_grade
+                                        final_data["一级部门调整完毕"] = "是"
+                                    ok, err = update_record_safely(APP_TOKEN, TABLE_ID, rid, final_data)
+                                    if ok:
+                                        submitted_cnt += 1
+                                    else:
+                                        err_msgs.append(f"{sub_name}: {err}")
+                                if submitted_cnt > 0:
+                                    st.success(f"✅ 已成功提交 {submitted_cnt} 人！")
+                                    st.balloons()
+                                    time.sleep(1.5)
+                                    st.rerun()
+                                if err_msgs:
+                                    st.error("❌ 部分提交失败：" + "; ".join(err_msgs[:3]))
+                                if submitted_cnt == 0 and not err_msgs:
+                                    st.info("💡 当前暂无待提交的暂存评价。")
                     st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
                     st.markdown("---")
 
@@ -1724,7 +1838,9 @@ def main_app():
                             disp_mgr_grade = "-"
 
                         dept_chain = build_dept_chain(sub_f) or normalize_dept_text(sub_f.get("一级部门")) or "未分配部门"
-                        rel_badge = "<span style='font-size:11px;color:#4CAF50;margin-left:4px;'>(直属)</span>" if is_direct else "<span style='font-size:11px;color:#888;margin-left:4px;'>(隔级)</span>"
+                        # 仅隔级上级/一级部门负责人/分管高管打标，普通管理者不打标
+                        _need_rel_badge = is_vp or is_dept_head or (len(my_all_subs) > len(my_direct_subs))
+                        rel_badge = ("<span style='font-size:11px;color:#4CAF50;margin-left:4px;'>(直属)</span>" if is_direct else "<span style='font-size:11px;color:#888;margin-left:4px;'>(隔级)</span>") if _need_rel_badge else ""
                         c1, c2, c3, c4, c5, c6 = st.columns([2.2, 3.2, 1.2, 1.2, 1.2, 2.0], vertical_alignment="center")
                         c1.markdown(
                             f"<div class='sub-list-cell' style='color:#E0E0E0; white-space:normal;'><b>{s_name}</b>{rel_badge}<br>（{s_emp_id}）</div>",
@@ -1768,6 +1884,7 @@ def main_app():
                     if current_sub:
                         sub_f = current_sub.get("fields", {})
                         is_direct_sub = current_sub["record_id"] in direct_record_ids  # 隔级下属仅可查看，不可编辑
+                        is_mgr_submitted = extract_text(sub_f.get("上级评价是否完成")).strip() == "是"  # 已确认提交则仅可查看
                         sub_id_str = current_sub["record_id"]
                         disp_emp_id = extract_text(sub_f.get("工号") or sub_f.get("员工工号"), "未知工号")
                         disp_name = extract_text(sub_f.get("姓名"), "未知姓名")
@@ -1795,6 +1912,8 @@ def main_app():
                             action_button("collapse", "收起面板", key=f"btn_collapse_panel_{sub_id_str}", on_click=return_to_self)
                         if not is_direct_sub:
                             st.warning("⚠️ 您为隔级上级，仅可查看该下属信息，不可调整其绩效。")
+                        if is_mgr_submitted:
+                            st.success("🔒 该下属的上级评价已确认提交，仅可查看，不可修改。")
                         st.write("")
                         
                         st.markdown("---")
@@ -1824,7 +1943,7 @@ def main_app():
                         except: work_idx = 0
                         
                         st.info(f"💡 提示：该下属工作目标总权重为 **{sub_weight_sum}%**")
-                        mgr_work_score = st.selectbox("🌟 工作目标整体上级评分", options=SCORE_OPTIONS, index=work_idx, key=f"mgr_work_score_{sub_id_str}", disabled=not is_direct_sub)
+                        mgr_work_score = st.selectbox("🌟 工作目标整体上级评分", options=SCORE_OPTIONS, index=work_idx, key=f"mgr_work_score_{sub_id_str}", disabled=not is_direct_sub or is_mgr_submitted)
                         st.markdown("---")
 
                         st.markdown("<div class='module-title'>🧠 通用能力模块展示与评分</div>", unsafe_allow_html=True)
@@ -1838,7 +1957,7 @@ def main_app():
                         st.text_area("隐藏标签", value=sub_comp_text, height=100, disabled=True, key=f"ui_sub_comp_{sub_id_str}", label_visibility="collapsed")
                         st.write("")
                         
-                        mgr_comp_score = st.selectbox("🌟 通用能力上级评分", options=SCORE_OPTIONS, index=comp_idx, key=f"mgr_comp_score_{sub_id_str}", disabled=not is_direct_sub)
+                        mgr_comp_score = st.selectbox("🌟 通用能力上级评分", options=SCORE_OPTIONS, index=comp_idx, key=f"mgr_comp_score_{sub_id_str}", disabled=not is_direct_sub or is_mgr_submitted)
                         
                         sub_role = extract_text(sub_f.get("角色", "")).strip() 
                         has_leadership = (sub_role == "管理者") 
@@ -1856,7 +1975,7 @@ def main_app():
                             st.text_area("隐藏标签", value=sub_lead_text, height=100, disabled=True, key=f"ui_sub_lead_{sub_id_str}", label_visibility="collapsed")
                             st.write("")
                             
-                            mgr_lead_score = st.selectbox("🌟 领导力上级评分", options=SCORE_OPTIONS, index=lead_idx, key=f"mgr_lead_score_{sub_id_str}", disabled=not is_direct_sub)
+                            mgr_lead_score = st.selectbox("🌟 领导力上级评分", options=SCORE_OPTIONS, index=lead_idx, key=f"mgr_lead_score_{sub_id_str}", disabled=not is_direct_sub or is_mgr_submitted)
                         st.markdown("---")
                         comp_weight = 20 if has_leadership else (100 - sub_weight_sum)
                         lead_weight = 20 if has_leadership else 0
@@ -1876,7 +1995,7 @@ def main_app():
                         
                         saved_comment_raw = extract_text(sub_f.get("考核评语", ""), "").strip()
                         saved_comment = saved_comment_raw if saved_comment_raw and saved_comment_raw not in ["未获取", "None", "0"] else ""
-                        st.text_area("✍️ 考核评语", value=saved_comment, height=100, placeholder="请输入对该下属的整体评价...", key=f"mgr_comment_{sub_id_str}", disabled=not is_direct_sub)
+                        st.text_area("✍️ 考核评语", value=saved_comment, height=100, placeholder="请输入对该下属的整体评价...", key=f"mgr_comment_{sub_id_str}", disabled=not is_direct_sub or is_mgr_submitted)
                         
                         sub_update_data = {
                             "考核得分": current_total_score,
@@ -1891,7 +2010,8 @@ def main_app():
 
                         st.markdown("---")
                         st.markdown("<div class='save-marker'></div>", unsafe_allow_html=True)
-                        if is_direct_sub and st.button("保存草稿", use_container_width=True, key=f"btn_mgr_save_draft_{sub_id_str}"):
+                        mgr_save_draft_disabled = not is_direct_sub or is_mgr_submitted or not step2_can_submit
+                        if is_direct_sub and st.button("保存草稿", use_container_width=True, key=f"btn_mgr_save_draft_{sub_id_str}", disabled=mgr_save_draft_disabled):
                             with st.spinner("同步数据至飞书..."):
                                 success, error_msg = update_record_safely(APP_TOKEN, TABLE_ID, st.session_state.selected_subordinate_id, sub_update_data)
                                 if success:
@@ -1900,6 +2020,8 @@ def main_app():
                                     st.error(f"❌ 暂存失败：{error_msg}")
                         if st.session_state.pop("mgr_draft_saved", False):
                             st.success("💡 提示：已妥善保存。")
+                        if mgr_save_draft_disabled and is_direct_sub and not is_mgr_submitted and not step2_can_submit:
+                            st.caption("⚠️ 请先完成工作目标、通用能力、领导力（如有）的评分及考核评语后，方可保存草稿。")
                         st.info("💡提示：请点击「保存草稿」，全部评价之后统一点击提交即可。")
                     else:
                         st.error("未找到对应下属的数据，请返回重试。")
@@ -2826,7 +2948,7 @@ def main_app():
                     # 过滤范围：视图与调整权限保持一致
                     # - 分管高管：看到名下所有员工（按「分管高管 / 高管」字段，排除本人）
                     # - 一级部门负责人：看到本部门所有员工（按「一级部门负责人 / 部门负责人」字段，排除本人）
-                    # - 普通管理者：沿用「直接评价人 / 评价人」作为我的团队
+                    # - 普通管理者/隔级上级：直属+隔级下属，即「直接评价人」或「隔级上级」包含当前用户
                     report_scope = "vp" if is_vp else ("dept_head" if is_dept_head else "mgr")
                     report_scoped = []
                     for rec in report_records_all:
@@ -2846,7 +2968,10 @@ def main_app():
                                     report_scoped.append(rec)
                             else:
                                 rec_manager = extract_text(rf.get("直接评价人") or rf.get("评价人"), "").strip()
-                                if user_name and user_name in rec_manager:
+                                rec_skip_level = extract_text(rf.get("隔级上级"), "").strip()
+                                is_direct = user_name and user_name in rec_manager
+                                is_skip_level = user_name and user_name in rec_skip_level and not is_direct
+                                if (is_direct or is_skip_level) and emp_name != user_name:
                                     report_scoped.append(rec)
 
                     # 周期筛选
@@ -3624,7 +3749,10 @@ def main_app():
                                 history_scoped.append(rec)
                         else:
                             rec_manager = extract_text(rf.get("直接评价人") or rf.get("评价人"), "").strip()
-                            if user_name in rec_manager:
+                            rec_skip_level = extract_text(rf.get("隔级上级"), "").strip()
+                            is_direct = user_name and user_name in rec_manager
+                            is_skip_level = user_name and user_name in rec_skip_level and not is_direct
+                            if is_direct or is_skip_level:
                                 history_scoped.append(rec)
 
                     if not history_scoped:
@@ -3650,23 +3778,26 @@ def main_app():
                                     history_dept_options.add(_d1)
                         history_dept_options = sorted(history_dept_options)
 
-                        # 筛选框与「直属」按钮同一行
+                        # 筛选框与「直属」按钮同一行（隔级上级也有隔级下属，需直属筛选与打标）
+                        has_skip_level_subs = len(my_all_subs) > len(my_direct_subs)
                         if "history_filter_mode" not in st.session_state:
                             st.session_state.history_filter_mode = "all"
-                        n_cols = 4 if (is_vp or is_dept_head) else 3
+                        n_cols = 4 if (is_vp or is_dept_head or has_skip_level_subs) else 3
                         cols = st.columns([1, 2, 1, 0.8] if n_cols == 4 else [1, 2, 1], gap="small")
                         q_name_emp = cols[0].text_input("搜索工号、姓名", placeholder="🔎 搜索工号、姓名", key="history_filter_name_emp", label_visibility="collapsed")
                         q_dept = cols[1].selectbox("部门", ["全部部门"] + history_dept_options, key="history_filter_dept", label_visibility="collapsed")
                         q_grade = cols[2].selectbox("考核等级", ["全部考核等级"] + GRADE_OPTIONS + ["-", "暂无"], key="history_filter_grade", label_visibility="collapsed")
-                        if is_vp or is_dept_head:
-                            if cols[3].button("直属", key="history_btn_direct", use_container_width=True):
-                                st.session_state.history_filter_mode = "all" if st.session_state.history_filter_mode == "direct" else "direct"
-                                st.rerun()
+                        if is_vp or is_dept_head or has_skip_level_subs:
+                            with cols[3]:
+                                st.markdown("<div class='history-direct-btn-marker' style='width:0;height:0;overflow:hidden;'></div>", unsafe_allow_html=True)
+                                if st.button("直属", key="history_btn_direct", use_container_width=True):
+                                    st.session_state.history_filter_mode = "all" if st.session_state.history_filter_mode == "direct" else "direct"
+                                    st.rerun()
 
                         # 筛选模式：全部 / 直属
                         history_to_filter = history_scoped
                         mode = st.session_state.get("history_filter_mode", "all")
-                        if (is_vp or is_dept_head) and mode == "direct":
+                        if (is_vp or is_dept_head or has_skip_level_subs) and mode == "direct":
                             history_to_filter = []
                             for rec in history_scoped:
                                 rf = rec.get("fields", {})
@@ -3693,7 +3824,7 @@ def main_app():
                                 continue
                             filtered_history.append(rec)
 
-                        if (is_vp or is_dept_head) and mode == "direct":
+                        if (is_vp or is_dept_head or has_skip_level_subs) and mode == "direct":
                             st.caption("📌 当前显示：直属")
                         st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
 
@@ -3710,9 +3841,16 @@ def main_app():
                             perf_cycle = extract_text(f.get("上一次绩效考核对应周期", "暂无"), "").strip() or "暂无"
                             last_result = extract_text(f.get("上一次绩效考核结果", "暂无"), "").strip() or "暂无"
                             res_color = _grade_colors.get(last_result, "#b7bdc8")
+                            # 直属打标：一级部门负责人/分管高管/隔级上级的直属显示绿色(直属)标识，隔级不标记
+                            rec_manager = extract_text(f.get("直接评价人") or f.get("评价人"), "").strip()
+                            is_direct = user_name and user_name in rec_manager
+                            name_display = f"<b>{name}</b>"
+                            if (is_vp or is_dept_head or has_skip_level_subs) and is_direct:
+                                name_display += f" <span style='color:#4CAF50;'>(直属)</span>"
+                            name_display += f"（{emp}）"
 
                             c1, c2, c3, c4 = st.columns([1.8, 3.2, 2.0, 1.5], gap="small", vertical_alignment="center")
-                            c1.markdown(f"<div class='sub-list-cell' style='color:#E0E0E0; text-align:center;'><b>{name}</b>（{emp}）</div>", unsafe_allow_html=True)
+                            c1.markdown(f"<div class='sub-list-cell' style='color:#E0E0E0; text-align:center;'>{name_display}</div>", unsafe_allow_html=True)
                             c2.markdown(f"<div class='sub-list-cell sub-list-cell-multiline' style='color:#b0b0b0; text-align:center;' title='{dept_display} | {job}'>{dept_display}<br>{job}</div>", unsafe_allow_html=True)
                             c3.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center;'>{perf_cycle}</div>", unsafe_allow_html=True)
                             c4.markdown(f"<div class='sub-list-cell' style='color:{res_color}; text-align:center; font-weight:700;'>{last_result}</div>", unsafe_allow_html=True)
