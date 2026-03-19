@@ -1,20 +1,3 @@
 {
-  "users": [
-    {
-      "label": "财富顾问部-管理者示例 (工号: XQxxxx)",
-      "name": "示例姓名",
-      "open_id": "ou_xxxxxxxxxxxxxxxxxxxxxxxx",
-      "emp_id": "XQxxxx",
-      "job_title": "财富顾问负责人",
-      "role": "管理者"
-    },
-    {
-      "label": "财富顾问部-员工示例 (工号: XQyyyy)",
-      "name": "示例姓名",
-      "open_id": "ou_yyyyyyyyyyyyyyyyyyyyyyyy",
-      "emp_id": "XQyyyy",
-      "job_title": "财富顾问",
-      "role": "员工"
-    }
-  ]
+  "users": []
 }

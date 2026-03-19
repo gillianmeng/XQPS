@@ -87,10 +87,7 @@ python3 get_open_ids.py -l   # 列出所有一级部门
 
 ```
 XQPS/
-├── new_app.py              # 主应用
-├── demo_entry.py           # 研发质量部演示入口
-├── demo_entry_hr.py        # 人力资源部演示入口
-├── demo_entry_wealth.py    # 财富顾问部演示入口
+├── new_app.py              # 主应用（含演示入口 ?demo_entry=1）
 ├── get_open_ids.py        # 从飞书拉取员工 open_id 工具
 ├── run_demo.sh            # 演示环境启动脚本
 ├── requirements.txt

@@ -332,24 +332,6 @@
       "job_title": "高级测试开发工程师",
       "role": "员工",
       "test_env": "研发质量部"
-    },
-    {
-      "label": "资产管理部-分管高管（测试）",
-      "name": "资产管理部高管",
-      "open_id": "ou_demo_asset_vp_001",
-      "emp_id": "DEMO_ASSET_VP",
-      "job_title": "分管高管",
-      "role": "管理者",
-      "test_env": "资产管理部与金融运营部"
-    },
-    {
-      "label": "金融运营部-一级部门负责人（测试）",
-      "name": "金融运营部负责人",
-      "open_id": "ou_demo_finance_ops_001",
-      "emp_id": "DEMO_FIN_OPS",
-      "job_title": "一级部门负责人",
-      "role": "管理者",
-      "test_env": "资产管理部与金融运营部"
     }
   ]
 }
