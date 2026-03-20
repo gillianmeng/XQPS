@@ -1,19 +1,43 @@
 {
   "users": [
     {
-      "label": "人力资源部-管理者示例 (工号: XQxxxx)",
-      "name": "示例姓名",
-      "open_id": "ou_xxxxxxxxxxxxxxxxxxxxxxxx",
-      "emp_id": "XQxxxx",
+      "label": "孟凡卓（工号: XQ1308）",
+      "name": "孟凡卓",
+      "open_id": "ou_hrbp_mengfanzhuo_demo",
+      "emp_id": "XQ1308",
       "job_title": "HRBP",
       "role": "管理者"
     },
     {
-      "label": "人力资源部-员工示例 (工号: XQyyyy)",
-      "name": "示例姓名",
-      "open_id": "ou_yyyyyyyyyyyyyyyyyyyyyyyy",
-      "emp_id": "XQyyyy",
-      "job_title": "HR专员",
+      "label": "孙春悦（工号: XQ1032）",
+      "name": "孙春悦",
+      "open_id": "ou_hrbp_sunchunyue_demo",
+      "emp_id": "XQ1032",
+      "job_title": "高级HRBP专家",
+      "role": "管理者"
+    },
+    {
+      "label": "曹亦雄（工号: XQ1510）",
+      "name": "曹亦雄",
+      "open_id": "ou_hrbp_caoyixiong_demo",
+      "emp_id": "XQ1510",
+      "job_title": "资深HRBP",
+      "role": "员工"
+    },
+    {
+      "label": "杨聪敏（工号: XQ1156）",
+      "name": "杨聪敏",
+      "open_id": "ou_hrbp_yangcongmin_demo",
+      "emp_id": "XQ1156",
+      "job_title": "资深招聘",
+      "role": "员工"
+    },
+    {
+      "label": "郑红平（工号: XQ1451）",
+      "name": "郑红平",
+      "open_id": "ou_hrbp_zhenghongping_demo",
+      "emp_id": "XQ1451",
+      "job_title": "高级HRBP",
       "role": "员工"
     }
   ]

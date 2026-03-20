@@ -27,3 +27,6 @@ demo_users_wealth.json
 
 # 克隆的公司仓库目录
 xqps/
+
+# 管理员配置（运行时写入）
+admin_config.json
