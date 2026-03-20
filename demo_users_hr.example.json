@@ -1,6 +1,14 @@
 {
   "users": [
     {
+      "label": "张燕（工号: XQ555）",
+      "name": "张燕",
+      "open_id": "ou_admin_zhangyan_demo",
+      "emp_id": "XQ555",
+      "job_title": "薪酬福利专家",
+      "role": "员工"
+    },
+    {
       "label": "孟凡卓（工号: XQ1308）",
       "name": "孟凡卓",
       "open_id": "ou_hrbp_mengfanzhuo_demo",
