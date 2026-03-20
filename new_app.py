@@ -975,7 +975,7 @@ def _render_hrbp_dashboard():
             _doc_items.append(f'<div style="margin-bottom: 8px; padding: 6px 8px; border-radius: 4px; background: rgba(255,255,255,0.03);"><a href="{_url}" target="_blank" style="color: #b7bdc8;">{_dn}</a></div>')
         else:
             _doc_items.append(f'<div style="margin-bottom: 8px; padding: 6px 8px; color: #888;">{_dn}</div>')
-    st.sidebar.markdown(f"<div style='font-size: 11px;'>{"".join(_doc_items)}</div>", unsafe_allow_html=True)
+    st.sidebar.markdown(f"<div style='font-size: 11px;'>{''.join(_doc_items)}</div>", unsafe_allow_html=True)
     st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
     if st.sidebar.button("🚪 退出登录", use_container_width=True):
         st.session_state.clear()
@@ -2583,7 +2583,7 @@ def main_app():
     _doc_items[-1] = _doc_items[-1].replace("margin-bottom: 8px;", "margin-bottom: 0;")
     st.sidebar.markdown(f"""
     <div class="policy-learning-box" style="font-size: 11px;">
-        {"".join(_doc_items)}
+        {''.join(_doc_items)}
     </div>
     """, unsafe_allow_html=True)
     st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
@@ -4675,7 +4675,7 @@ def main_app():
                                     <table style='width:100%;border-collapse:collapse;text-align:center;'>
                                     <thead><tr style='border-bottom:1px solid rgba(255,255,255,0.2);'>{header_cells_d}</tr></thead>
                                     <tbody>
-                                    {"".join(_rows)}
+                                    {''.join(_rows)}
                                     </tbody>
                                     </table>
                                     </div>
