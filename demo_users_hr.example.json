@@ -17,6 +17,14 @@
       "role": "管理者"
     },
     {
+      "label": "谭莹（工号: XQ888）",
+      "name": "谭莹",
+      "open_id": "ou_hrbp_tanying_demo",
+      "emp_id": "XQ888",
+      "job_title": "人力资源总监",
+      "role": "员工"
+    },
+    {
       "label": "曹亦雄（工号: XQ1510）",
       "name": "曹亦雄",
       "open_id": "ou_hrbp_caoyixiong_demo",
