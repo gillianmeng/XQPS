@@ -1,3 +1,4 @@
+from __future__ import annotations
 import streamlit as st
 import requests
 import urllib.parse
@@ -436,6 +437,72 @@ def _clean_dept_name(v):
     parts = [p.strip() for p in t.split("-") if p.strip() and p.strip() not in ["-", "--", "—", "未获取"]]
     return "-".join(parts).strip("-").strip()
 
+
+def _is_dept_head(rec):
+    """该员工是否为所在一级部门的部门负责人（不能调整自己，故从部门统计中排除）"""
+    name = _extract_text(rec.get("fields", {}).get("姓名"), "").strip()
+    head_str = _extract_text(rec.get("fields", {}).get("一级部门负责人") or rec.get("fields", {}).get("部门负责人"), "").strip()
+    for h in head_str.replace("，", ",").split(","):
+        if h.strip() and name == h.strip():
+            return True
+    return False
+
+
+def _is_executive(rec):
+    """飞书表格「特殊判断」为「高管」的员工"""
+    v = _extract_text(rec.get("fields", {}).get("特殊判断"), "").strip()
+    return v == "高管"
+
+
+def _build_detail_stats(records, extract_text_fn=None, dept_key="一级部门"):
+    """
+    构建部门绩效详情统计：高管单列，各部门含一级部门负责人。
+    返回 (exec_stats, dept_stats)，dept_stats 的 key 为部门名。
+    dept_key: "一级部门" 或 "二级部门"（二级部门时若为空则退回到一级部门）
+    exec_stats / dept_stats 结构: total, done, grades, sales_total, sales_done, sales_grades, non_sales_total, non_sales_done, non_sales_grades
+    """
+    ex = extract_text_fn or _extract_text
+
+    def _fresh_stats():
+        return {"total": 0, "done": 0, "grades": {g: 0 for g in GRADE_OPTIONS}, "sales_total": 0, "sales_done": 0, "sales_grades": {g: 0 for g in GRADE_OPTIONS}, "non_sales_total": 0, "non_sales_done": 0, "non_sales_grades": {g: 0 for g in GRADE_OPTIONS}}
+    exec_stats = _fresh_stats()
+    dept_stats = {}
+    for rec in (records or []):
+        f = rec.get("fields", {})
+        mgr_done = ex(f.get("上级评价是否完成"), "").strip() == "是"
+        final_grade = ex(f.get("最终绩效结果") or f.get("最终考核结果"), "").strip()
+        if final_grade not in GRADE_OPTIONS:
+            final_grade = "-"
+        is_sales = ex(f.get("是否绩效关联奖金"), "").strip() == "否"
+        is_exec = _is_executive(rec)
+        if is_exec:
+            t = exec_stats
+        else:
+            if dept_key == "二级部门":
+                dept_name = _normalize_dept_text(f.get("二级部门")) or _clean_dept_name(f.get("一级部门")) or "未分配部门"
+            else:
+                dept_name = _clean_dept_name(f.get("一级部门")) or "未分配部门"
+            t = dept_stats.setdefault(dept_name, _fresh_stats())
+        t["total"] += 1
+        if mgr_done:
+            t["done"] += 1
+        if final_grade in GRADE_OPTIONS:
+            t["grades"][final_grade] += 1
+        if is_sales:
+            t["sales_total"] += 1
+            if mgr_done:
+                t["sales_done"] += 1
+            if final_grade in GRADE_OPTIONS:
+                t["sales_grades"][final_grade] += 1
+        else:
+            t["non_sales_total"] += 1
+            if mgr_done:
+                t["non_sales_done"] += 1
+            if final_grade in GRADE_OPTIONS:
+                t["non_sales_grades"][final_grade] += 1
+    return exec_stats, dept_stats
+
+
 def _normalize_dept_text(val):
     raw = _extract_text(val, "").strip()
     if raw in ["", "未获取", "-", "--", "—"]:
@@ -600,9 +667,6 @@ def _render_admin_dashboard():
     report_records = []
     for rec in all_records:
         rf = rec.get("fields", {})
-        emp_name = _extract_text(rf.get("姓名"), "").strip()
-        if emp_name == user_name:
-            continue
         cyc = _pick_cycle_from_fields(rf)
         if _cycles_match(cyc, current_cycle):
             report_records.append(rec)
@@ -626,14 +690,20 @@ def _render_admin_dashboard():
     report_records_for_allcompany = list(report_records)
 
     if _sel_vp and _sel_vp != "全部":
+        # 管理员本人任分管高管时，部门统计需包含管理员本人，仅当所选分管高管为他人时才排除该高管
         report_records = [
             r for r in report_records
             if _sel_vp in _extract_text(r.get("fields", {}).get("分管高管") or r.get("fields", {}).get("高管"), "").strip()
-            and _extract_text(r.get("fields", {}).get("姓名"), "").strip() != _sel_vp
+            and (_extract_text(r.get("fields", {}).get("姓名"), "").strip() != _sel_vp or _sel_vp == user_name)
         ]
 
-    # 分管高管配额总数：不受一级部门筛选影响，保存分管高管筛选后的数据（已排除分管高管本人）
-    report_records_for_vp_quota = list(report_records) if (_sel_vp and _sel_vp != "全部") else []
+    # 分管高管配额：负责范围总体 = 该分管名下全员（不含本人），不受一级部门筛选影响
+    if _sel_vp and _sel_vp != "全部":
+        _vp_in_scope = lambda r: _sel_vp in _extract_text(r.get("fields", {}).get("分管高管") or r.get("fields", {}).get("高管"), "").strip()
+        _vp_not_self = lambda r: _extract_text(r.get("fields", {}).get("姓名"), "").strip() != _sel_vp
+        report_records_for_vp_quota = [r for r in report_records_for_quota if _vp_in_scope(r) and _vp_not_self(r)]
+    else:
+        report_records_for_vp_quota = []
 
     # 按一级部门筛选
     _dept_names = sorted({(_clean_dept_name(r.get("fields", {}).get("一级部门")) or "未分配部门") for r in report_records})
@@ -728,7 +798,7 @@ def _render_admin_dashboard():
             st.caption("公告")
             _cc = _read_cycle_config(_config_cycle)
             _ann_loc_cfg = st.selectbox("公告位置", options=ANNOUNCE_LOCATIONS, key="admin_ann_loc_cfg_empty", label_visibility="collapsed")
-            _ann_val = st.text_area("公告内容", value=_cc["announcements"].get(_ann_loc_cfg) or "", key="admin_ann_cfg_empty", height=80, label_visibility="collapsed", placeholder="留空则使用系统默认")
+            _ann_val = st.text_area("公告内容", value=_cc["announcements"].get(_ann_loc_cfg) or "", key="admin_ann_cfg_empty", height=80, label_visibility="collapsed", placeholder="由管理员填写，留空则无公告")
             if st.button("保存公告", key="admin_save_ann_cfg_empty"):
                 _write_admin_announcement(_ann_loc_cfg, _ann_val, cycle=_config_cycle)
                 st.success("已保存")
@@ -1002,15 +1072,16 @@ def _render_admin_dashboard():
         report_records_for_quota if st.session_state.get("report_bonus_scope_filter", "全部") == "全部"
         else (report_sales_for_quota if st.session_state.report_bonus_scope_filter == "销售" else report_non_sales_for_quota)
     )
-    _recs_quota_for_base = _recs_quota
+    # 各部门配额：仅排除一级部门负责人；负责范围总体含分管高管本人
+    _recs_quota_for_dept = _recs_quota
     if _sel_vp and _sel_vp != "全部":
-        _recs_quota_for_base = [
-            r for r in _recs_quota
-            if _sel_vp in _extract_text(r.get("fields", {}).get("分管高管") or r.get("fields", {}).get("高管"), "").strip()
-            and _extract_text(r.get("fields", {}).get("姓名"), "").strip() != _sel_vp
-        ]
-    _dept_quota_base = _build_dept_grade_stats(_recs_quota_for_base, use_total_as_base=True)
-    _dept_actual = _build_dept_grade_stats(report_records, use_total_as_base=True)
+        _vp_in = lambda r: _sel_vp in _extract_text(r.get("fields", {}).get("分管高管") or r.get("fields", {}).get("高管"), "").strip()
+        _vp_self = lambda r: _extract_text(r.get("fields", {}).get("姓名"), "").strip() == _sel_vp
+        _recs_quota_for_dept = [r for r in _recs_quota if _vp_in(r) or _vp_self(r)]
+    _recs_quota_dept = [r for r in _recs_quota_for_dept if not _is_dept_head(r)]
+    _recs_actual_dept = [r for r in report_records if not _is_dept_head(r)]
+    _dept_quota_base = _build_dept_grade_stats(_recs_quota_dept, use_total_as_base=True)
+    _dept_actual = _build_dept_grade_stats(_recs_actual_dept, use_total_as_base=True)
     dept_grade_stats = {}
     for dept_name in sorted(set(_dept_quota_base.keys()) | set(_dept_actual.keys())):
         qb = _dept_quota_base.get(dept_name, {})
@@ -1054,11 +1125,12 @@ def _render_admin_dashboard():
             "actual_sum": ac.get("actual_sum", 0),
         }
 
-    # 分管高管配额总数：仅受分管高管、销售/非销售影响，不受一级部门影响
+    # 分管高管配额总数：负责范围总体 = 该分管名下全员（不含本人），仅受销售/非销售影响，不受一级部门影响
     dept_grade_stats_vp = {}
     if _sel_vp and _sel_vp != "全部" and report_records_for_vp_quota:
-        _vp_exclude = lambda r: _extract_text(r.get("fields", {}).get("姓名"), "").strip() != _sel_vp
-        _recs_quota_vp = [r for r in _recs_quota if _sel_vp in _extract_text(r.get("fields", {}).get("分管高管") or r.get("fields", {}).get("高管"), "").strip() and _vp_exclude(r)]
+        _vp_in_scope = lambda r: _sel_vp in _extract_text(r.get("fields", {}).get("分管高管") or r.get("fields", {}).get("高管"), "").strip()
+        _vp_not_self = lambda r: _extract_text(r.get("fields", {}).get("姓名"), "").strip() != _sel_vp
+        _recs_quota_vp = [r for r in _recs_quota if _vp_in_scope(r) and _vp_not_self(r)]
         _recs_actual_vp = report_records_for_vp_quota if st.session_state.get("report_bonus_scope_filter", "全部") == "全部" else (
             report_sales_for_vp_quota if st.session_state.report_bonus_scope_filter == "销售" else report_non_sales_for_vp_quota
         )
@@ -1187,7 +1259,7 @@ def _render_admin_dashboard():
         st.caption("公告")
         _cc = _read_cycle_config(_config_cycle)
         _ann_loc_cfg = st.selectbox("公告位置", options=ANNOUNCE_LOCATIONS, key="admin_ann_loc_cfg", label_visibility="collapsed")
-        _ann_val = st.text_area("公告内容", value=_cc["announcements"].get(_ann_loc_cfg) or "", key="admin_ann_cfg", height=80, label_visibility="collapsed", placeholder="留空则使用系统默认")
+        _ann_val = st.text_area("公告内容", value=_cc["announcements"].get(_ann_loc_cfg) or "", key="admin_ann_cfg", height=80, label_visibility="collapsed", placeholder="由管理员填写，留空则无公告")
         if st.button("保存公告", key="admin_save_ann_cfg"):
             _write_admin_announcement(_ann_loc_cfg, _ann_val, cycle=_config_cycle)
             st.success("已保存")
@@ -1304,8 +1376,8 @@ def _render_admin_dashboard():
     st.markdown("<div class='module-title'>📊 全公司绩效概览</div>", unsafe_allow_html=True)
     _kpi_html = f"""
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:12px;">
-        <div style="flex:1;min-width:120px;text-align:center;padding:16px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08);" title="此统计包含分管高管数，但如下绩效统计则均不包含">
-            <div class="report-kpi-label" title="此统计包含分管高管数，但如下绩效统计则均不包含" style="cursor:help;white-space:nowrap;">考核总人数 ⓘ</div>
+        <div style="flex:1;min-width:120px;text-align:center;padding:16px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08);" title="含管理员及分管高管在内，全公司参与考核人数；以下绩效统计按筛选展示">
+            <div class="report-kpi-label" title="含管理员及分管高管在内，全公司参与考核人数；以下绩效统计按筛选展示" style="cursor:help;white-space:nowrap;">考核总人数 ⓘ</div>
             <div style="font-size:32px;font-weight:700;color:#42A5F5;margin-top:8px;">{kpi_total}</div>
         </div>
         <div style="flex:1;min-width:120px;text-align:center;padding:16px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08);" title="对应「最终考核结果」不为空">
@@ -1349,8 +1421,13 @@ def _render_admin_dashboard():
         _filter_active.append(f"销售/非销售：{st.session_state.report_bonus_scope_filter}")
     if _filter_active:
         _hint = f"💡 当前筛选：{' | '.join(_filter_active)}"
+        _stat_parts = []
         if _sel_vp and _sel_vp != "全部":
-            _hint += "。各种统计均不包含分管高管本人。"
+            _stat_parts.append("统计均不包含分管高管本人")
+        if _sel_dept and _sel_dept != "全部部门":
+            _stat_parts.append("一级部门不含一级部门负责人本人")
+        if _stat_parts:
+            _hint += "。" + "，".join(_stat_parts) + "。"
         st.markdown(
             f"<div style='background:rgba(2,119,189,0.15);border:1px solid rgba(2,119,189,0.4);border-radius:6px;padding:8px 12px;font-size:13px;color:#66b2ff;margin-top:8px;margin-bottom:24px;'>{_hint}</div>",
             unsafe_allow_html=True,
@@ -1454,13 +1531,13 @@ def _render_admin_dashboard():
         _totals["total"] += dval.get("total", 0)
         _table_rows.append(row)
 
-    t_all = _totals_allcompany.get("total", 0) or 1
+    t_all = int(_totals_allcompany.get("total", 0) or 1)
     _summary_row = {"部门": "全公司"}
     for label, key in _step_cols:
-        n = _totals_allcompany.get(key, 0)
+        n = int(_totals_allcompany.get(key, 0) or 0)
         _summary_row[f"{label}"] = n
         _summary_row[f"{label}%"] = _pct(t_all, n)
-    _summary_row["总数"] = _totals_allcompany.get("total", 0)
+    _summary_row["总数"] = int(_totals_allcompany.get("total", 0) or 0)
     _table_rows.insert(0, _summary_row)
 
     if _table_rows:
@@ -1590,6 +1667,8 @@ def _render_admin_dashboard():
             </div>
             """
             st.markdown(_vp_quota_html, unsafe_allow_html=True)
+            if not (_sel_vp and _sel_vp != "全部" and _sel_dept and _sel_dept != "全部部门"):
+                st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 配额统计口径：负责范围总体配额中，不含分管高管（因其不能调整自己）。</div>", unsafe_allow_html=True)
         if _sel_vp and _sel_vp != "全部":
             st.markdown("<div style='font-size:16px;font-weight:700;color:#66b2ff;margin-bottom:8px;'>各分管部门总数</div>", unsafe_allow_html=True)
         _q_rows = []
@@ -1632,8 +1711,168 @@ def _render_admin_dashboard():
         </div>
         """
         st.markdown(_q_html, unsafe_allow_html=True)
+        if _sel_vp and _sel_vp != "全部" and _sel_dept and _sel_dept != "全部部门":
+            st.markdown(f"<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 当前筛选：分管高管：{_sel_vp} | 一级部门：{_sel_dept}。统计均不包含分管高管本人，一级部门不含一级部门负责人本人。</div>", unsafe_allow_html=True)
+        else:
+            st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 配额统计口径：各部门配额中，不含一级部门负责人（因其不能调整自己）。</div>", unsafe_allow_html=True)
     else:
-        st.caption("暂无配额数据")
+        st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>暂无配额数据</div>", unsafe_allow_html=True)
+
+    # 部门绩效详情：高管单列，各部门含一级部门负责人，按分管高管分组
+    st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div class='module-title'>🧾 部门绩效详情</div>", unsafe_allow_html=True)
+    _admin_exec, _admin_dept = _build_detail_stats(report_records)
+    _admin_vp_to_depts = {}
+    _admin_exec_by_name = {}  # 按高管本人姓名统计，仅 特殊判断=高管 的人
+    for rec in report_records:
+        f = rec.get("fields", {})
+        vp_str = _extract_text(f.get("分管高管") or f.get("高管"), "").strip()
+        if _is_executive(rec):
+            # 高管只统计一次，不随分管高管数量重复
+            exec_name = _extract_text(f.get("姓名"), "").strip() or "未知"
+            if exec_name not in _admin_exec_by_name:
+                _admin_exec_by_name[exec_name] = {"total": 0, "done": 0, "grades": {g: 0 for g in GRADE_OPTIONS}, "sales_total": 0, "sales_done": 0, "sales_grades": {g: 0 for g in GRADE_OPTIONS}, "non_sales_total": 0, "non_sales_done": 0, "non_sales_grades": {g: 0 for g in GRADE_OPTIONS}}
+            t = _admin_exec_by_name[exec_name]
+            mgr_done = _extract_text(f.get("上级评价是否完成"), "").strip() == "是"
+            fg = _extract_text(f.get("最终绩效结果") or f.get("最终考核结果"), "").strip()
+            if fg not in GRADE_OPTIONS:
+                fg = "-"
+            is_sales = _extract_text(f.get("是否绩效关联奖金"), "").strip() == "否"
+            t["total"] += 1
+            if mgr_done:
+                t["done"] += 1
+            if fg in GRADE_OPTIONS:
+                t["grades"][fg] += 1
+            if is_sales:
+                t["sales_total"] += 1
+                if mgr_done:
+                    t["sales_done"] += 1
+                if fg in GRADE_OPTIONS:
+                    t["sales_grades"][fg] += 1
+            else:
+                t["non_sales_total"] += 1
+                if mgr_done:
+                    t["non_sales_done"] += 1
+                if fg in GRADE_OPTIONS:
+                    t["non_sales_grades"][fg] += 1
+        else:
+            for vp in vp_str.replace("，", ",").split(","):
+                vp = vp.strip()
+                if not vp:
+                    continue
+                dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
+                _admin_vp_to_depts.setdefault(vp, set()).add(dept_l1)
+    _admin_dept_rows = []
+
+    _indent = "\u2003\u2003"  # 全角空格，用于缩进
+
+    def _admin_row(dept, scope, t, d, g, indent=0):
+        rv = round(d / t * 100, 1) if t else 0
+        disp_dept = (_indent * indent) + dept if indent else dept
+        return {"部门": disp_dept, "口径": scope, "总人数": t, "已完成": d, "完成率": "100%" if rv == 100 else f"{rv}%", "S级": g["S"], "A级": g["A"], "B+级": g["B+"], "B级": g["B"], "B-级": g["B-"], "C级": g["C"]}
+    # 高管-部门对应：exec 的 分管高管；以及 exec 是否「负责部门」（exec 是否在 vp_to_depts 的 key 中）
+    _admin_exec_to_vps = {}
+    _admin_exec_responsible = set()  # 负责部门的高管（本人是分管高管）
+    for rec in report_records:
+        if not _is_executive(rec):
+            continue
+        f = rec.get("fields", {})
+        exec_name = _extract_text(f.get("姓名"), "").strip() or "未知"
+        vp_str = _extract_text(f.get("分管高管") or f.get("高管"), "").strip()
+        for vp in vp_str.replace("，", ",").split(","):
+            vp = vp.strip()
+            if vp:
+                _admin_exec_to_vps.setdefault(exec_name, set()).add(vp)
+    for vp in _admin_vp_to_depts.keys():
+        if vp in _admin_exec_by_name:
+            _admin_exec_responsible.add(vp)
+    # 人力资源部、战略发展部：若其所有分管高管都不在特殊判断=高管，则单列
+    _single_list_depts = {"人力资源部", "战略发展部"}
+    _dept_to_vps = {}
+    for _avp, depts in _admin_vp_to_depts.items():
+        for d in depts:
+            if d in _single_list_depts:
+                _dept_to_vps.setdefault(d, set()).add(_avp)
+    _dept_need_single_list = {d for d in _single_list_depts if d in _dept_to_vps and not any(vp in _admin_exec_by_name for vp in _dept_to_vps[d])}
+    for _adn in sorted(_dept_need_single_list):
+        dv = _admin_dept.get(_adn, {})
+        if not dv or dv.get("total", 0) == 0:
+            continue
+        _admin_dept_rows.append(_admin_row(_adn, "总", dv["total"], dv["done"], dv["grades"], indent=0))
+        if (dv.get("sales_total") or 0) > 0 and (dv.get("non_sales_total") or 0) > 0:
+            _admin_dept_rows.append(_admin_row(_adn, "销售", dv["sales_total"], dv["sales_done"], dv.get("sales_grades", dv["grades"]), indent=1))
+            _admin_dept_rows.append(_admin_row(_adn, "非销售", dv["non_sales_total"], dv["non_sales_done"], dv.get("non_sales_grades", dv["grades"]), indent=1))
+    # 按分管高管分组：每个分管下 1) 先出「本分管且负责部门」的高管 2) 再出「本分管但不负责部门」的高管（缩进）3) 再出部门（缩进）
+    for _avp in sorted(_admin_vp_to_depts.keys()):
+        # 1) 本分管是高管且负责部门：高管（VP）无缩进
+        if _avp in _admin_exec_by_name and _avp in _admin_exec_responsible:
+            dv = _admin_exec_by_name[_avp]
+            if dv["total"] > 0:
+                _admin_dept_rows.append(_admin_row(f"高管（{_avp}）", "总", dv["total"], dv["done"], dv["grades"], indent=0))
+                if (dv.get("sales_total") or 0) > 0 and (dv.get("non_sales_total") or 0) > 0:
+                    _admin_dept_rows.append(_admin_row(f"高管（{_avp}）", "销售", dv["sales_total"], dv["sales_done"], dv.get("sales_grades", dv["grades"]), indent=1))
+                    _admin_dept_rows.append(_admin_row(f"高管（{_avp}）", "非销售", dv["non_sales_total"], dv["non_sales_done"], dv.get("non_sales_grades", dv["grades"]), indent=1))
+        # 2) 本分管下其他高管（不负责部门，归本分管管）：缩进 1
+        for _exec_name in sorted(_admin_exec_by_name.keys()):
+            if _exec_name == _avp:
+                continue
+            if _exec_name in _admin_exec_responsible:
+                continue
+            if _avp not in _admin_exec_to_vps.get(_exec_name, set()):
+                continue
+            dv = _admin_exec_by_name[_exec_name]
+            if dv["total"] > 0:
+                _admin_dept_rows.append(_admin_row(f"高管（{_exec_name}）", "总", dv["total"], dv["done"], dv["grades"], indent=1))
+                if (dv.get("sales_total") or 0) > 0 and (dv.get("non_sales_total") or 0) > 0:
+                    _admin_dept_rows.append(_admin_row(f"高管（{_exec_name}）", "销售", dv["sales_total"], dv["sales_done"], dv.get("sales_grades", dv["grades"]), indent=2))
+                    _admin_dept_rows.append(_admin_row(f"高管（{_exec_name}）", "非销售", dv["non_sales_total"], dv["non_sales_done"], dv.get("non_sales_grades", dv["grades"]), indent=2))
+        # 3) 本分管负责的部门：缩进 1（人力资源部、战略发展部若分管非高管已单列，此处跳过）
+        for _adn in sorted(_admin_vp_to_depts.get(_avp, [])):
+            if _adn in _dept_need_single_list:
+                continue
+            dv = _admin_dept.get(_adn, {})
+            if not dv or dv.get("total", 0) == 0:
+                continue
+            _admin_dept_rows.append(_admin_row(_adn, "总", dv["total"], dv["done"], dv["grades"], indent=1))
+            if (dv.get("sales_total") or 0) > 0 and (dv.get("non_sales_total") or 0) > 0:
+                _admin_dept_rows.append(_admin_row(_adn, "销售", dv["sales_total"], dv["sales_done"], dv.get("sales_grades", dv["grades"]), indent=2))
+                _admin_dept_rows.append(_admin_row(_adn, "非销售", dv["non_sales_total"], dv["non_sales_done"], dv.get("non_sales_grades", dv["grades"]), indent=2))
+    # 4) 纯高管（不负责部门、分管为空）放最后
+    _shown_execs = set()
+    for row in _admin_dept_rows:
+        dept = str(row.get("部门", ""))
+        if "高管（" in dept and "）" in dept:
+            start = dept.index("高管（") + 3
+            end = dept.index("）", start)
+            _shown_execs.add(dept[start:end].strip())
+    for _exec_name in sorted(_admin_exec_by_name.keys()):
+        if _exec_name in _shown_execs:
+            continue
+        dv = _admin_exec_by_name[_exec_name]
+        if dv["total"] > 0:
+            _admin_dept_rows.append(_admin_row(f"高管（{_exec_name}）", "总", dv["total"], dv["done"], dv["grades"], indent=0))
+            if (dv.get("sales_total") or 0) > 0 and (dv.get("non_sales_total") or 0) > 0:
+                _admin_dept_rows.append(_admin_row(f"高管（{_exec_name}）", "销售", dv["sales_total"], dv["sales_done"], dv.get("sales_grades", dv["grades"]), indent=1))
+                _admin_dept_rows.append(_admin_row(f"高管（{_exec_name}）", "非销售", dv["non_sales_total"], dv["non_sales_done"], dv.get("non_sales_grades", dv["grades"]), indent=1))
+    _admin_dept_df = pd.DataFrame(_admin_dept_rows)
+    if not _admin_dept_df.empty:
+        def _admin_dept_style(row):
+            scope, dept = row.get("口径", ""), str(row.get("部门", ""))
+            if "高管（" in dept:
+                if scope == "总":
+                    return ["font-weight: 700; font-size: 14px; background-color: rgba(255,193,7,0.12); color: #FFC107;"] * len(row)
+                if scope in ("销售", "非销售"):
+                    return ["font-size: 12px; background-color: rgba(255,193,7,0.06);"] * len(row)
+            if scope == "总":
+                return ["font-weight: 700; font-size: 14px; background-color: rgba(255,255,255,0.06);"] * len(row)
+            if scope == "销售":
+                return ["font-size: 12px; color: #81C784;"] * len(row)
+            if scope == "非销售":
+                return ["font-size: 12px; color: #64B5F6;"] * len(row)
+            return [""] * len(row)
+        _admin_dept_df = _admin_dept_df.style.set_properties(**{"text-align": "center"}).apply(_admin_dept_style, axis=1)
+    st.dataframe(_admin_dept_df, use_container_width=True, hide_index=True)
+    st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 提示：各部门含一级部门负责人，高管单列；如果一级部门负责人和高管为同一人，则一级部门中不含，高管单列。</div>", unsafe_allow_html=True)
 
     # 管理员数据下载：可选择列导出
     st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
@@ -1654,7 +1893,25 @@ def _render_admin_dashboard():
         _export_df = _download_df[_sel_cols]
 
         _csv_bytes = _export_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8")
-        st.download_button("📥 下载 CSV", data=_csv_bytes, file_name=f"绩效数据_{current_cycle}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", mime="text/csv", key="admin_download_csv")
+        _ts = datetime.now().strftime("%Y%m%d_%H%M")
+        _xl_bytes = b""
+        _has_excel = False
+        try:
+            import openpyxl
+            _xl_buffer = io.BytesIO()
+            _export_df.to_excel(_xl_buffer, index=False, engine="openpyxl")
+            _xl_bytes = _xl_buffer.getvalue()
+            _has_excel = True
+        except ImportError:
+            pass
+        _d1, _d2 = st.columns(2)
+        with _d1:
+            st.download_button("📥 下载 CSV", data=_csv_bytes, file_name=f"绩效数据_{current_cycle}_{_ts}.csv", mime="text/csv", key="admin_download_csv")
+        with _d2:
+            if _has_excel:
+                st.download_button("📥 下载 Excel", data=_xl_bytes, file_name=f"绩效数据_{current_cycle}_{_ts}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="admin_download_excel")
+            else:
+                st.caption("💡 需安装 openpyxl 以启用 Excel 导出: pip install openpyxl")
     else:
         st.caption("暂无数据可下载")
 
@@ -1771,9 +2028,33 @@ def _render_hrbp_dashboard():
             continue
         report_records.append(rec)
 
-    # 按选择部门筛选（侧边栏 selectbox 在下方渲染，首次为默认值）
-    _sel_dept = st.session_state.get("hrbp_dept_select", "全部")
-    if _sel_dept and _sel_dept != "全部":
+    # 分管高管、一级部门筛选（与管理员一致，选项限定在负责范围内）
+    _hrbp_vp_names = set()
+    for rec in report_records:
+        vp_str = _extract_text(rec.get("fields", {}).get("分管高管") or rec.get("fields", {}).get("高管"), "").strip()
+        for v in vp_str.replace("，", ",").split(","):
+            if v.strip():
+                _hrbp_vp_names.add(v.strip())
+    _hrbp_vp_opts = ["全部"] + sorted(_hrbp_vp_names)
+    _hrbp_dept_names = sorted({(_clean_dept_name(r.get("fields", {}).get("一级部门")) or "未分配部门") for r in report_records})
+    _hrbp_dept_opts = ["全部部门"] + _hrbp_dept_names
+    if "hrbp_vp_filter" not in st.session_state or st.session_state.hrbp_vp_filter not in _hrbp_vp_opts:
+        st.session_state.hrbp_vp_filter = "全部"
+    if "hrbp_dept_filter" not in st.session_state or st.session_state.hrbp_dept_filter not in _hrbp_dept_opts:
+        st.session_state.hrbp_dept_filter = "全部部门"
+    _sel_vp = st.session_state.get("hrbp_vp_filter", "全部")
+    _sel_dept = st.session_state.get("hrbp_dept_filter", "全部部门")
+    # 绩效概览 KPI：与管理员一致，不受分管高管/一级部门/销售非销售筛选影响
+    report_records_for_hrbp_kpi = list(report_records)
+    if _sel_vp and _sel_vp != "全部":
+        report_records = [
+            r for r in report_records
+            if _sel_vp in _extract_text(r.get("fields", {}).get("分管高管") or r.get("fields", {}).get("高管"), "").strip()
+            and (_extract_text(r.get("fields", {}).get("姓名"), "").strip() != _sel_vp or _sel_vp == user_name)
+        ]
+    # 负责范围总体配额：仅随分管高管变，不随一级部门变
+    report_records_for_scope_quota = list(report_records)
+    if _sel_dept and _sel_dept != "全部部门":
         report_records = [r for r in report_records if (_clean_dept_name(r.get("fields", {}).get("一级部门")) or "未分配部门") == _sel_dept]
 
     total_cnt = len(report_records)
@@ -1786,9 +2067,9 @@ def _render_hrbp_dashboard():
         if is_hrbp_lead:
             dept_to_hrbp = _compute_hrbp_subordinates_by_dept(user_name)
             if dept_to_hrbp:
+                _sub_bp_names = sorted({n for names in dept_to_hrbp.values() for n in names if n != user_name})
                 st.sidebar.markdown("### 👥 下属 HRBP")
-                for d in sorted(dept_to_hrbp.keys()):
-                    st.sidebar.caption(f"**{d}**：{', '.join(dept_to_hrbp[d])}")
+                st.sidebar.caption(", ".join(_sub_bp_names))
         if scope_depts:
             st.sidebar.markdown("### 📋 负责部门")
             st.sidebar.caption(", ".join(sorted(scope_depts)))
@@ -1841,15 +2122,23 @@ def _render_hrbp_dashboard():
         if final_grade in GRADE_OPTIONS:
             grade_counts[final_grade] += 1
             grade_people[final_grade].append(person)
-        _base = {"total": 0, "done": 0, "grades": {g: 0 for g in GRADE_OPTIONS}}
+        _base = {"total": 0, "done": 0, "target_set": 0, "self_done": 0, "dept_done": 0, "vp_done": 0, "grades": {g: 0 for g in GRADE_OPTIONS}}
         dept_info = dept_stats.setdefault(dept_l1, {
             **_base,
             "sales_total": 0, "sales_done": 0, "sales_grades": {g: 0 for g in GRADE_OPTIONS},
             "non_sales_total": 0, "non_sales_done": 0, "non_sales_grades": {g: 0 for g in GRADE_OPTIONS},
         })
         dept_info["total"] += 1
+        if has_target:
+            dept_info["target_set"] += 1
+        if self_done:
+            dept_info["self_done"] += 1
         if mgr_done:
             dept_info["done"] += 1
+        if dept_done:
+            dept_info["dept_done"] += 1
+        if vp_done:
+            dept_info["vp_done"] += 1
         if final_grade in GRADE_OPTIONS:
             dept_info["grades"][final_grade] += 1
         is_sales = _extract_text(f.get("是否绩效关联奖金"), "").strip() == "否"
@@ -1868,7 +2157,52 @@ def _render_hrbp_dashboard():
 
     report_sales = [r for r in report_records if _extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "否"]
     report_non_sales = [r for r in report_records if _extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "是"]
+    report_sales_for_scope_quota = [r for r in report_records_for_scope_quota if _extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "否"]
+    report_non_sales_for_scope_quota = [r for r in report_records_for_scope_quota if _extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "是"]
     has_bonus_no = len(report_sales) > 0 and len(report_non_sales) > 0
+    # 部门绩效详情：不受筛选影响，始终展示负责范围全量；高管单列，各部门含一级部门负责人
+    exec_stats_for_detail, dept_stats_for_detail = _build_detail_stats(report_records_for_hrbp_kpi)
+    # HRBP：按分管高管分组部门；高管按本人姓名统计（仅 特殊判断=高管）
+    vp_to_depts = {}
+    exec_by_name = {}  # 按高管本人姓名
+    exec_to_vps = {}   # exec_name -> set(vps) 用于按 VP 分组展示
+
+    def _fresh_hrbp_detail():
+        return {"total": 0, "done": 0, "grades": {g: 0 for g in GRADE_OPTIONS}, "sales_total": 0, "sales_done": 0, "sales_grades": {g: 0 for g in GRADE_OPTIONS}, "non_sales_total": 0, "non_sales_done": 0, "non_sales_grades": {g: 0 for g in GRADE_OPTIONS}}
+    for rec in report_records_for_hrbp_kpi:
+        f = rec.get("fields", {})
+        vp_str = _extract_text(f.get("分管高管") or f.get("高管"), "").strip()
+        vps = [vp.strip() for vp in vp_str.replace("，", ",").split(",") if vp.strip()]
+        mgr_done = _extract_text(f.get("上级评价是否完成"), "").strip() == "是"
+        final_grade = _extract_text(f.get("最终绩效结果") or f.get("最终考核结果"), "").strip()
+        if final_grade not in GRADE_OPTIONS:
+            final_grade = "-"
+        is_sales = _extract_text(f.get("是否绩效关联奖金"), "").strip() == "否"
+        if _is_executive(rec):
+            exec_name = _extract_text(f.get("姓名"), "").strip() or "未知"
+            t = exec_by_name.setdefault(exec_name, _fresh_hrbp_detail())
+            exec_to_vps.setdefault(exec_name, set()).update(vps)
+            t["total"] += 1
+            if mgr_done:
+                t["done"] += 1
+            if final_grade in GRADE_OPTIONS:
+                t["grades"][final_grade] += 1
+            if is_sales:
+                t["sales_total"] += 1
+                if mgr_done:
+                    t["sales_done"] += 1
+                if final_grade in GRADE_OPTIONS:
+                    t["sales_grades"][final_grade] += 1
+            else:
+                t["non_sales_total"] += 1
+                if mgr_done:
+                    t["non_sales_done"] += 1
+                if final_grade in GRADE_OPTIONS:
+                    t["non_sales_grades"][final_grade] += 1
+        else:
+            for vp in vps:
+                dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
+                vp_to_depts.setdefault(vp, set()).add(dept_l1)
     report_scope = report_sales if report_sales else report_records
     if has_bonus_no:
         if "hrbp_report_bonus_scope_filter" not in st.session_state:
@@ -1929,15 +2263,13 @@ def _render_hrbp_dashboard():
     if is_hrbp_lead:
         dept_to_hrbp = _compute_hrbp_subordinates_by_dept(user_name)
         if dept_to_hrbp:
+            _sub_bp_names = sorted({n for names in dept_to_hrbp.values() for n in names if n != user_name})
             st.sidebar.markdown("### 👥 下属 HRBP")
-            for d in sorted(dept_to_hrbp.keys()):
-                hrbps = ", ".join(dept_to_hrbp[d])
-                st.sidebar.caption(f"**{d}**：{hrbps}")
+            st.sidebar.caption(", ".join(_sub_bp_names))
             st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
     if scope_depts:
         st.sidebar.markdown("### 📋 负责部门")
-        opts = ["全部"] + sorted(scope_depts)
-        st.sidebar.selectbox("选择查看部门", opts, key="hrbp_dept_select", format_func=lambda x: "全部部门" if x == "全部" else x)
+        st.sidebar.caption(", ".join(sorted(scope_depts)))
     st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
     st.sidebar.markdown("### 📚 制度学习")
     _doc_items = []
@@ -1956,10 +2288,82 @@ def _render_hrbp_dashboard():
     # 主体内容（居中对齐）
     st.markdown("<div class='hrbp-view-container'></div>", unsafe_allow_html=True)
     st.markdown("<div class='module-title'>📊 HRBP 绩效概览</div>", unsafe_allow_html=True)
-    if _sel_dept and _sel_dept != "全部":
-        st.markdown(f"<p style='color:#b7bdc8;'>📌 当前查看：<strong>{_sel_dept}</strong></p>", unsafe_allow_html=True)
+    # KPI：与管理员一致，不受筛选影响（考核总人数、已完成评价、总体完成率、剩余未评）
+    hrbp_kpi_total = len(report_records_for_hrbp_kpi)
+    hrbp_kpi_done = 0
+    for r in report_records_for_hrbp_kpi:
+        f = r.get("fields", {})
+        final = _extract_text(f.get("最终考核结果"), "").strip()
+        if final in GRADE_OPTIONS:
+            hrbp_kpi_done += 1
+        else:
+            for cand in [_extract_text(f.get("分管高管调整考核结果"), "").strip(), _extract_text(f.get("一级部门调整考核结果"), "").strip(), _extract_text(f.get("考核结果"), "").strip()]:
+                if cand in GRADE_OPTIONS:
+                    hrbp_kpi_done += 1
+                    break
+    hrbp_kpi_rate = round(hrbp_kpi_done / hrbp_kpi_total * 100, 1) if hrbp_kpi_total else 0
+    hrbp_kpi_remaining = hrbp_kpi_total - hrbp_kpi_done
+    _hrbp_kpi_html = f"""
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:12px;">
+        <div style="flex:1;min-width:120px;text-align:center;padding:16px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08);" title="此为绩效考核总数，包含分管高管、一级部门负责人">
+            <div class="report-kpi-label" title="此为绩效考核总数，包含分管高管、一级部门负责人" style="cursor:help;white-space:nowrap;">考核总人数 ⓘ</div>
+            <div style="font-size:32px;font-weight:700;color:#42A5F5;margin-top:8px;">{hrbp_kpi_total}</div>
+        </div>
+        <div style="flex:1;min-width:120px;text-align:center;padding:16px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08);" title="最终考核结果不为空">
+            <div class="report-kpi-label" style="cursor:help;white-space:nowrap;">已完成评价 ⓘ</div>
+            <div style="font-size:32px;font-weight:700;color:#26A69A;margin-top:8px;">{hrbp_kpi_done}</div>
+        </div>
+        <div style="flex:1;min-width:120px;text-align:center;padding:16px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08);">
+            <div class="report-kpi-label" style="white-space:nowrap;">总体完成率</div>
+            <div style="font-size:32px;font-weight:700;color:#FFA726;margin-top:8px;">{hrbp_kpi_rate}%</div>
+        </div>
+        <div style="flex:1;min-width:120px;text-align:center;padding:16px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08);">
+            <div class="report-kpi-label" style="white-space:nowrap;">剩余未评</div>
+            <div style="font-size:32px;font-weight:700;color:#EF5350;margin-top:8px;">{hrbp_kpi_remaining}</div>
+        </div>
+    </div>
+    """
+    st.markdown(_hrbp_kpi_html, unsafe_allow_html=True)
+    st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
+    # 筛选框：与管理员一致（分管高管、一级部门、销售/非销售）
+    st.markdown("<div class='module-title'>📋 各部门考核环节进度</div>", unsafe_allow_html=True)
+    _hf1, _hf2, _hf3 = st.columns(3)
+    with _hf1:
+        st.selectbox("分管高管", options=_hrbp_vp_opts, key="hrbp_vp_filter", format_func=lambda x: "全部" if x == "全部" else x)
+    with _hf2:
+        st.selectbox("一级部门", options=_hrbp_dept_opts, key="hrbp_dept_filter", format_func=lambda x: "全部部门" if x == "全部部门" else x)
+    with _hf3:
+        if has_bonus_no:
+            st.markdown(
+                '<div style="border-left: 4px solid #26A69A; padding: 8px 0 8px 12px; border-radius: 0 6px 6px 0; background: rgba(38, 166, 154, 0.06);"><span style="color: #26A69A; font-weight: 600; font-size: 14px;">销售/非销售</span></div>',
+                unsafe_allow_html=True,
+            )
+            st.selectbox("销售/非销售", options=["全部", "销售", "非销售"], key="hrbp_report_bonus_scope_filter", label_visibility="collapsed")
+        else:
+            st.caption("")
+    _hrbp_filter_active = []
+    if _sel_vp and _sel_vp != "全部":
+        _hrbp_filter_active.append(f"分管高管：{_sel_vp}")
+    if _sel_dept and _sel_dept != "全部部门":
+        _hrbp_filter_active.append(f"一级部门：{_sel_dept}")
+    if has_bonus_no and st.session_state.get("hrbp_report_bonus_scope_filter", "全部") != "全部":
+        _hrbp_filter_active.append(f"销售/非销售：{st.session_state.hrbp_report_bonus_scope_filter}")
+    if _hrbp_filter_active:
+        _hrbp_hint = f"💡 当前筛选：{' | '.join(_hrbp_filter_active)}"
+        _hrbp_stat_parts = []
+        if _sel_vp and _sel_vp != "全部":
+            _hrbp_stat_parts.append("统计均不包含分管高管本人")
+        if _sel_dept and _sel_dept != "全部部门":
+            _hrbp_stat_parts.append("一级部门不含一级部门负责人本人")
+        if _hrbp_stat_parts:
+            _hrbp_hint += "。" + "，".join(_hrbp_stat_parts) + "。"
+        st.markdown(
+            f"<div style='background:rgba(2,119,189,0.15);border:1px solid rgba(2,119,189,0.4);border-radius:6px;padding:8px 12px;font-size:13px;color:#66b2ff;margin-top:8px;margin-bottom:24px;'>{_hrbp_hint}</div>",
+            unsafe_allow_html=True,
+        )
+    st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
     # 各步骤完成情况（可点击查看具体人员，只读）
-    st.markdown("<p><strong>各步骤完成情况</strong>（点击数字查看具体人员）</p>", unsafe_allow_html=True)
+    st.markdown("<p class='hrbp-left-label'><strong>各步骤完成情况</strong>（点击数字查看具体人员）</p>", unsafe_allow_html=True)
     k1, k2, k3, k4, k5 = st.columns(5)
     with k1:
         st.caption("已设定目标")
@@ -1996,10 +2400,91 @@ def _render_hrbp_dashboard():
             st.session_state.pop("hrbp_clicked", None)
             st.rerun()
 
-    if has_bonus_no:
-        st.selectbox("销售/非销售筛选", options=["全部", "销售", "非销售"], key="hrbp_report_bonus_scope_filter")
+    # 各部门考核环节进度表（筛选框已在上方）
+    st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
+    _hrbp_dept_stats_for_table = dept_stats
+    if has_bonus_no and st.session_state.get("hrbp_report_bonus_scope_filter", "全部") != "全部":
+        _hrbp_dept_stats_for_table = {}
+        _sk = st.session_state.get("hrbp_report_bonus_scope_filter", "全部")
+        _recs_hrbp = report_sales if _sk == "销售" else report_non_sales
+        for rec in _recs_hrbp:
+            f = rec.get("fields", {})
+            dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
+            has_target = any(_extract_text(f.get(f"工作目标{i}及总结"), "").strip() for i in range(1, 6))
+            self_done = _extract_text(f.get("自评是否提交"), "").strip() == "是"
+            mgr_done = _extract_text(f.get("上级评价是否完成"), "").strip() == "是"
+            dept_done = _extract_text(f.get("一级部门调整完毕"), "").strip() == "是"
+            vp_done = _extract_text(f.get("分管高管调整完毕"), "").strip() == "是"
+            vp_adj = _extract_text(f.get("分管高管调整考核结果"), "").strip()
+            dept_adj = _extract_text(f.get("一级部门调整考核结果"), "").strip()
+            mgr_grade = _extract_text(f.get("考核结果"), "").strip()
+            final_grade = "-"
+            for cand in [vp_adj, dept_adj, mgr_grade]:
+                if cand in GRADE_OPTIONS:
+                    final_grade = cand
+                    break
+            _base = {"total": 0, "done": 0, "target_set": 0, "self_done": 0, "dept_done": 0, "vp_done": 0, "grades": {g: 0 for g in GRADE_OPTIONS}}
+            di = _hrbp_dept_stats_for_table.setdefault(dept_l1, {**_base})
+            di["total"] += 1
+            if has_target:
+                di["target_set"] += 1
+            if self_done:
+                di["self_done"] += 1
+            if mgr_done:
+                di["done"] += 1
+            if dept_done:
+                di["dept_done"] += 1
+            if vp_done:
+                di["vp_done"] += 1
+            if final_grade in GRADE_OPTIONS:
+                di["grades"][final_grade] += 1
+    _hrbp_totals_scope = {"target_set": 0, "self_done": 0, "done": 0, "dept_done": 0, "vp_done": 0, "total": 0}
+    for dval in _hrbp_dept_stats_for_table.values():
+        for k in _hrbp_totals_scope:
+            _hrbp_totals_scope[k] += dval.get(k, 0)
+    def _hrbp_pct(t, n):
+        return f"{round(n / t * 100, 1)}%" if t and t > 0 else "0%"
+    _hrbp_step_cols = [
+        ("目标设定", "target_set"),
+        ("自评", "self_done"),
+        ("上级评价", "done"),
+        ("部门调整", "dept_done"),
+        ("高管调整", "vp_done"),
+    ]
+    _hrbp_table_rows = []
+    for dept_name, dval in sorted(_hrbp_dept_stats_for_table.items(), key=lambda x: x[0]):
+        t = dval.get("total", 0) or 1
+        row = {"部门": dept_name}
+        for label, key in _hrbp_step_cols:
+            n = dval.get(key, 0)
+            row[f"{label}"] = n
+            row[f"{label}%"] = _hrbp_pct(t, n)
+        row["总数"] = dval.get("total", 0)
+        _hrbp_table_rows.append(row)
+    t_hrbp_all = int(_hrbp_totals_scope.get("total", 0) or 1)
+    _hrbp_summary_row = {"部门": "负责范围合计"}
+    for label, key in _hrbp_step_cols:
+        n = int(_hrbp_totals_scope.get(key, 0) or 0)
+        _hrbp_summary_row[f"{label}"] = n
+        _hrbp_summary_row[f"{label}%"] = _hrbp_pct(t_hrbp_all, n)
+    _hrbp_summary_row["总数"] = int(_hrbp_totals_scope.get("total", 0) or 0)
+    _hrbp_table_rows.insert(0, _hrbp_summary_row)
+    if _hrbp_table_rows:
+        _hrbp_step_headers = []
+        for label, _ in _hrbp_step_cols:
+            _hrbp_step_headers.extend([label, f"{label}%"])
+        _hrbp_all_cols = ["部门"] + _hrbp_step_headers + ["总数"]
+        _hrbp_step_df = pd.DataFrame(_hrbp_table_rows, columns=_hrbp_all_cols)
+        def _hrbp_step_style(row):
+            is_total = str(row.get("部门", "")) == "负责范围合计"
+            base = "font-weight: 700; background-color: rgba(33,150,243,0.18); color: #42A5F5; border-top: 2px solid rgba(33,150,243,0.5); border-bottom: 2px solid rgba(33,150,243,0.5);" if is_total else ""
+            return [base or "text-align: center;"] * len(row)
+        _hrbp_step_df = _hrbp_step_df.style.set_properties(**{"text-align": "center"}).apply(_hrbp_step_style, axis=1)
+        st.dataframe(_hrbp_step_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("暂无数据")
 
-    st.markdown("<p><strong>考核等级分布</strong>（点击数字查看具体人员）</p>", unsafe_allow_html=True)
+    st.markdown("<p class='hrbp-left-label'><strong>考核等级分布</strong>（点击数字查看具体人员）</p>", unsafe_allow_html=True)
     gc1, gc2, gc3, gc4, gc5, gc6, gc7 = st.columns(7)
     grade_btns = [
         ("S/A", actual_sa, "hrbp_grade_sa", "hrbp-grade-sa", "S", "A"),
@@ -2032,46 +2517,295 @@ def _render_hrbp_dashboard():
             st.session_state.pop("hrbp_clicked", None)
             st.rerun()
 
-    st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
-    st.markdown("<div class='module-title'>🧾 部门绩效详情</div>", unsafe_allow_html=True)
-    _dept_stats_for_table = dept_stats
-    if has_bonus_no and st.session_state.get("hrbp_report_bonus_scope_filter", "全部") != "全部":
-        _dept_stats_for_table = {}
-        _sk = st.session_state.get("hrbp_report_bonus_scope_filter", "全部")
-        _recs = report_sales if _sk == "销售" else report_non_sales
-        for rec in _recs:
-            f = rec.get("fields", {})
-            dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
-            mgr_done = _extract_text(f.get("上级评价是否完成"), "").strip() == "是"
-            vp_adj = _extract_text(f.get("分管高管调整考核结果"), "").strip()
-            dept_adj = _extract_text(f.get("一级部门调整考核结果"), "").strip()
-            mgr_grade = _extract_text(f.get("考核结果"), "").strip()
-            final_grade = "-"
+    # 配额模块（与管理员页面一致：负责范围总体 + 各部门）
+    st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div class='module-title'>📊 配额模块</div>", unsafe_allow_html=True)
+
+    def _hrbp_build_dept_grade_stats(recs, use_total_as_base=False):
+        dgs = {}
+        for rec in (recs or []):
+            rf = rec.get("fields", {})
+            dept_l1 = _clean_dept_name(rf.get("一级部门")) or "未分配部门"
+            vp_adj = _extract_text(rf.get("分管高管调整考核结果"), "").strip()
+            dept_adj = _extract_text(rf.get("一级部门调整考核结果"), "").strip()
+            mgr_grade = _extract_text(rf.get("考核结果"), "").strip()
+            fg = "-"
             for cand in [vp_adj, dept_adj, mgr_grade]:
                 if cand in GRADE_OPTIONS:
-                    final_grade = cand
+                    fg = cand
                     break
-            _base = {"total": 0, "done": 0, "grades": {g: 0 for g in GRADE_OPTIONS}}
-            di = _dept_stats_for_table.setdefault(dept_l1, {**_base, "sales_total": 0, "sales_done": 0, "sales_grades": {g: 0 for g in GRADE_OPTIONS}, "non_sales_total": 0, "non_sales_done": 0, "non_sales_grades": {g: 0 for g in GRADE_OPTIONS}})
-            di["total"] += 1
-            if mgr_done:
-                di["done"] += 1
-            if final_grade in GRADE_OPTIONS:
-                di["grades"][final_grade] += 1
+            dg = dgs.setdefault(dept_l1, {"grade_counts": Counter(), "bonus_cnt": 0, "total_cnt": 0})
+            dg["total_cnt"] += 1
+            if _extract_text(rf.get("是否绩效关联奖金"), "").strip() == "是":
+                dg["bonus_cnt"] += 1
+            if fg in GRADE_OPTIONS:
+                dg["grade_counts"][fg] += 1
+        for dept_name, dg in dgs.items():
+            dg["base_cnt"] = dg["total_cnt"] if use_total_as_base else (dg["bonus_cnt"] if dg["bonus_cnt"] > 0 else dg["total_cnt"])
+            if dg["base_cnt"] == 0:
+                dg["base_cnt"] = 1
+            bmc = dg["grade_counts"].get("B-", 0) + dg["grade_counts"].get("C", 0)
+            dg["sa_theory"] = math.floor(dg["base_cnt"] * 0.20)
+            bp_base = math.floor(dg["base_cnt"] * 0.15)
+            bp_cap = math.floor(dg["base_cnt"] * 0.25)
+            dg["bp_theory"] = min(bp_cap, bp_base + bmc)
+            dg["sapb_theory"] = dg["sa_theory"] + dg["bp_theory"]
+            dg["actual_sa"] = dg["grade_counts"].get("S", 0) + dg["grade_counts"].get("A", 0)
+            dg["actual_bp"] = dg["grade_counts"].get("B+", 0)
+            dg["actual_sapb"] = dg["actual_sa"] + dg["actual_bp"]
+            dg["actual_b"] = dg["grade_counts"].get("B", 0)
+            dg["actual_bm"] = dg["grade_counts"].get("B-", 0)
+            dg["actual_c"] = dg["grade_counts"].get("C", 0)
+            dg["actual_sum"] = dg["actual_sa"] + dg["actual_bp"] + dg["actual_b"] + dg["actual_bm"] + dg["actual_c"]
+        return dgs
+
+    _hrbp_recs_quota = report_records if not has_bonus_no else (
+        report_records if st.session_state.get("hrbp_report_bonus_scope_filter", "全部") == "全部"
+        else (report_sales if st.session_state.hrbp_report_bonus_scope_filter == "销售" else report_non_sales)
+    )
+    _hrbp_recs_actual = report_records if not has_bonus_no else (
+        report_records if st.session_state.get("hrbp_report_bonus_scope_filter", "全部") == "全部"
+        else (report_sales if st.session_state.hrbp_report_bonus_scope_filter == "销售" else report_non_sales)
+    )
+    # 负责范围总体：仅随分管高管变，不随一级部门变（用 scope 数据）
+    _hrbp_recs_quota_scope = report_records_for_scope_quota if not has_bonus_no else (
+        report_records_for_scope_quota if st.session_state.get("hrbp_report_bonus_scope_filter", "全部") == "全部"
+        else (report_sales_for_scope_quota if st.session_state.hrbp_report_bonus_scope_filter == "销售" else report_non_sales_for_scope_quota)
+    )
+    _hrbp_recs_actual_scope = report_records_for_scope_quota if not has_bonus_no else (
+        report_records_for_scope_quota if st.session_state.get("hrbp_report_bonus_scope_filter", "全部") == "全部"
+        else (report_sales_for_scope_quota if st.session_state.hrbp_report_bonus_scope_filter == "销售" else report_non_sales_for_scope_quota)
+    )
+    _hrbp_dept_quota_base_total = _hrbp_build_dept_grade_stats(_hrbp_recs_quota_scope, use_total_as_base=True)
+    _hrbp_dept_actual_total = _hrbp_build_dept_grade_stats(_hrbp_recs_actual_scope, use_total_as_base=True)
+    hrbp_dept_grade_stats_total = {}
+    for dept_name in sorted(set(_hrbp_dept_quota_base_total.keys()) | set(_hrbp_dept_actual_total.keys())):
+        qb = _hrbp_dept_quota_base_total.get(dept_name, {})
+        ac = _hrbp_dept_actual_total.get(dept_name, {})
+        hrbp_dept_grade_stats_total[dept_name] = {
+            "base_cnt": qb.get("base_cnt", 1),
+            "sa_theory": qb.get("sa_theory", 0),
+            "bp_theory": qb.get("bp_theory", 0),
+            "sapb_theory": qb.get("sapb_theory", 0),
+            "actual_sa": ac.get("actual_sa", 0),
+            "actual_bp": ac.get("actual_bp", 0),
+            "actual_sapb": ac.get("actual_sapb", 0),
+            "actual_b": ac.get("actual_b", 0),
+            "actual_bm": ac.get("actual_bm", 0),
+            "actual_c": ac.get("actual_c", 0),
+            "actual_sum": ac.get("actual_sum", 0),
+        }
+    # 各部门配额：排除一级部门负责人（不能调整自己）
+    _hrbp_recs_quota_excl = [r for r in _hrbp_recs_quota if not _is_dept_head(r)]
+    _hrbp_recs_actual_excl = [r for r in _hrbp_recs_actual if not _is_dept_head(r)]
+    _hrbp_dept_quota_base = _hrbp_build_dept_grade_stats(_hrbp_recs_quota_excl, use_total_as_base=True)
+    _hrbp_dept_actual = _hrbp_build_dept_grade_stats(_hrbp_recs_actual_excl, use_total_as_base=True)
+    hrbp_dept_grade_stats = {}
+    for dept_name in sorted(set(_hrbp_dept_quota_base.keys()) | set(_hrbp_dept_actual.keys())):
+        qb = _hrbp_dept_quota_base.get(dept_name, {})
+        ac = _hrbp_dept_actual.get(dept_name, {})
+        hrbp_dept_grade_stats[dept_name] = {
+            "base_cnt": qb.get("base_cnt", 1),
+            "sa_theory": qb.get("sa_theory", 0),
+            "bp_theory": qb.get("bp_theory", 0),
+            "sapb_theory": qb.get("sapb_theory", 0),
+            "actual_sa": ac.get("actual_sa", 0),
+            "actual_bp": ac.get("actual_bp", 0),
+            "actual_sapb": ac.get("actual_sapb", 0),
+            "actual_b": ac.get("actual_b", 0),
+            "actual_bm": ac.get("actual_bm", 0),
+            "actual_c": ac.get("actual_c", 0),
+            "actual_sum": ac.get("actual_sum", 0),
+        }
+    _hrbp_dept_grade_filtered = {k: v for k, v in hrbp_dept_grade_stats.items() if k in _hrbp_dept_stats_for_table}
+    if _hrbp_dept_grade_filtered:
+        _q_cell = "font-size:14px;font-weight:700;white-space:nowrap;"
+        def _q_th(t):
+            return f"<th style='text-align:center;{_q_cell}'>{t}</th>"
+        def _q_td(v, c):
+            return f"<td style='text-align:center;color:{c};{_q_cell}'>{v}</td>"
+        def _q_label(t):
+            return f"<td style='text-align:center;color:#b7bdc8;{_q_cell}'>{t}</td>"
+        def _q_hint(v, c, h):
+            return f"<td style='text-align:center;color:{c};{_q_cell}'>{v}<span title='{h}' style='cursor:help;font-size:12px;margin-left:4px;color:#90A4AE;'>ⓘ</span></td>"
+        def _q_over(v, c, over):
+            if over:
+                return f"<td style='text-align:center;color:#F44336;font-weight:800;border:1px solid #F44336;border-radius:4px;{_q_cell}'>{v}<span title='人数超过上限人数，请修改' style='cursor:help;font-size:12px;margin-left:4px;color:#F44336;'>ⓘ</span></td>"
+            return f"<td style='text-align:center;color:{c};{_q_cell}'>{v}</td>"
+        def _q_colspan(v, c, col=1):
+            return f"<td style='text-align:center;color:{c};{_q_cell}' colspan='{col}'>{v}</td>"
+        _q_header = _q_th("级别") + _q_th("S/A级别") + _q_th("B+级别") + _q_th("B+及以上级别") + _q_th("B级别") + _q_th("B-级别") + _q_th("C级别") + _q_th("SUM (人)")
+        _q_bp_hint = "默认15%，根据实际的B-/C占比调整向上浮动"
+        _all_hrbp_tot = {"sa_theory": 0, "bp_theory": 0, "sapb_theory": 0, "base_cnt": 0, "actual_sa": 0, "actual_bp": 0, "actual_sapb": 0, "actual_b": 0, "actual_bm": 0, "actual_c": 0, "actual_sum": 0}
+        for dg in hrbp_dept_grade_stats_total.values():
+            for k in _all_hrbp_tot:
+                _all_hrbp_tot[k] += dg.get(k, 0)
+        _all_hrbp_over_sa = _all_hrbp_tot["actual_sa"] > _all_hrbp_tot["sa_theory"]
+        _all_hrbp_over_bp = _all_hrbp_tot["actual_bp"] > _all_hrbp_tot["bp_theory"]
+        _all_hrbp_over_sapb = _all_hrbp_tot["actual_sapb"] > _all_hrbp_tot["sapb_theory"]
+        _all_hrbp_c_sa = "#F44336" if _all_hrbp_over_sa else "#4CAFEE"
+        _all_hrbp_c_bp = "#F44336" if _all_hrbp_over_bp else "#8BC34A"
+        _all_hrbp_c_sapb = "#F44336" if _all_hrbp_over_sapb else "#00BCD4"
+        _all_hrbp_theory_row = (
+            _q_label("上限人数")
+            + _q_td(_all_hrbp_tot["sa_theory"], "#b7bdc8")
+            + _q_hint(_all_hrbp_tot["bp_theory"], "#b7bdc8", _q_bp_hint)
+            + _q_td(_all_hrbp_tot["sapb_theory"], "#b7bdc8")
+            + _q_label("剔除绩优/差")
+            + _q_colspan("按实际评价", "#b7bdc8", 2)
+            + _q_td(_all_hrbp_tot["base_cnt"], "#b7bdc8")
+        )
+        _all_hrbp_actual_row = (
+            _q_label("实际人数")
+            + _q_over(_all_hrbp_tot["actual_sa"], _all_hrbp_c_sa, _all_hrbp_over_sa)
+            + _q_over(_all_hrbp_tot["actual_bp"], _all_hrbp_c_bp, _all_hrbp_over_bp)
+            + _q_over(_all_hrbp_tot["actual_sapb"], _all_hrbp_c_sapb, _all_hrbp_over_sapb)
+            + _q_td(_all_hrbp_tot["actual_b"], "#90A4AE")
+            + _q_td(_all_hrbp_tot["actual_bm"], "#FFC107")
+            + _q_td(_all_hrbp_tot["actual_c"], "#F44336")
+            + _q_td(_all_hrbp_tot["actual_sum"], "#b7bdc8")
+        )
+        _all_hrbp_quota_html = f"""
+        <div style='overflow-x:auto; margin-bottom:16px;'>
+        <div style='font-size:16px;font-weight:700;color:#66b2ff;margin-bottom:8px;'>负责范围总体配额</div>
+        <table style='width:100%;border-collapse:collapse;text-align:center;border:1px solid rgba(255,255,255,0.15);'>
+        <thead><tr style='border-bottom:1px solid rgba(255,255,255,0.2);'>{_q_header}</tr></thead>
+        <tbody>
+        <tr style='border-bottom:1px solid rgba(255,255,255,0.1);'>{_all_hrbp_theory_row}</tr>
+        <tr>{_all_hrbp_actual_row}</tr>
+        </tbody>
+        </table>
+        </div>
+        """
+        st.markdown(_all_hrbp_quota_html, unsafe_allow_html=True)
+        st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 配额统计口径：负责范围总体配额中，不含分管高管（因其不能调整自己）。</div>", unsafe_allow_html=True)
+        _hrbp_q_rows = []
+        for dept_name in sorted(_hrbp_dept_grade_filtered.keys()):
+            dg = _hrbp_dept_grade_filtered[dept_name]
+            _hrbp_q_rows.append(f"<tr style='background:rgba(102,178,255,0.08);'><td colspan='8' style='text-align:left;padding:8px 12px;font-weight:700;color:#66b2ff;'>{dept_name}</td></tr>")
+            theory_row = (
+                _q_label("上限人数")
+                + _q_td(dg.get("sa_theory", 0), "#b7bdc8")
+                + _q_hint(dg.get("bp_theory", 0), "#b7bdc8", _q_bp_hint)
+                + _q_td(dg.get("sapb_theory", 0), "#b7bdc8")
+                + _q_label("剔除绩优/差")
+                + _q_colspan("按实际评价", "#b7bdc8", 2)
+                + _q_td(dg.get("base_cnt", 0), "#b7bdc8")
+            )
+            _over_sa = dg.get("actual_sa", 0) > dg.get("sa_theory", 0)
+            _over_bp = dg.get("actual_bp", 0) > dg.get("bp_theory", 0)
+            _over_sapb = dg.get("actual_sapb", 0) > dg.get("sapb_theory", 0)
+            _c_sa = "#F44336" if _over_sa else "#4CAFEE"
+            _c_bp = "#F44336" if _over_bp else "#8BC34A"
+            _c_sapb = "#F44336" if _over_sapb else "#00BCD4"
+            actual_row = (
+                _q_label("实际人数")
+                + _q_over(dg.get("actual_sa", 0), _c_sa, _over_sa)
+                + _q_over(dg.get("actual_bp", 0), _c_bp, _over_bp)
+                + _q_over(dg.get("actual_sapb", 0), _c_sapb, _over_sapb)
+                + _q_td(dg.get("actual_b", 0), "#90A4AE")
+                + _q_td(dg.get("actual_bm", 0), "#FFC107")
+                + _q_td(dg.get("actual_c", 0), "#F44336")
+                + _q_td(dg.get("actual_sum", 0), "#b7bdc8")
+            )
+            _hrbp_q_rows.append(f"<tr style='border-bottom:1px solid rgba(255,255,255,0.1);'>{theory_row}</tr>")
+            _hrbp_q_rows.append(f"<tr>{actual_row}</tr>")
+        _hrbp_q_html = f"""
+        <div style='overflow-x:auto; margin-top:12px;'>
+        <div style='font-size:16px;font-weight:700;color:#66b2ff;margin-bottom:8px;'>各部门配额</div>
+        <table style='width:100%;border-collapse:collapse;text-align:center;border:1px solid rgba(255,255,255,0.15);'>
+        <thead><tr style='border-bottom:1px solid rgba(255,255,255,0.2);'>{_q_header}</tr></thead>
+        <tbody>{''.join(_hrbp_q_rows)}</tbody>
+        </table>
+        </div>
+        """
+        st.markdown(_hrbp_q_html, unsafe_allow_html=True)
+        st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 配额统计口径：各部门配额中，不含一级部门负责人（因其不能调整自己）。</div>", unsafe_allow_html=True)
+    else:
+        st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>暂无配额数据</div>", unsafe_allow_html=True)
+
+    st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div class='module-title'>🧾 部门绩效详情</div>", unsafe_allow_html=True)
     dept_rows = []
-    for dept_name, dval in sorted(_dept_stats_for_table.items(), key=lambda x: x[0]):
-        def _row(dept, scope, t, d, g):
-            rv = round(d / t * 100, 1) if t else 0
-            return {"部门": dept, "口径": scope, "总人数": t, "已完成": d, "完成率": "100%" if rv == 100 else f"{rv}%", "S级": g["S"], "A级": g["A"], "B+级": g["B+"], "B级": g["B"], "B-级": g["B-"], "C级": g["C"]}
-        dept_rows.append(_row(dept_name, "总", dval["total"], dval["done"], dval["grades"]))
-        has_sales = (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0
-        if has_sales:
-            dept_rows.append(_row(dept_name, "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"])))
-            dept_rows.append(_row(dept_name, "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"])))
+    _indent_hrbp = "\u2003\u2003"
+
+    def _row(dept, scope, t, d, g, indent=0):
+        rv = round(d / t * 100, 1) if t else 0
+        disp_dept = (_indent_hrbp * indent) + dept if indent else dept
+        return {"部门": disp_dept, "口径": scope, "总人数": t, "已完成": d, "完成率": "100%" if rv == 100 else f"{rv}%", "S级": g["S"], "A级": g["A"], "B+级": g["B+"], "B级": g["B"], "B-级": g["B-"], "C级": g["C"]}
+    exec_responsible = set(vp_to_depts.keys()) & set(exec_by_name.keys())
+    _single_list_depts_hrbp = {"人力资源部", "战略发展部"}
+    _dept_to_vps_hrbp = {}
+    for vp, depts in vp_to_depts.items():
+        for d in depts:
+            if d in _single_list_depts_hrbp:
+                _dept_to_vps_hrbp.setdefault(d, set()).add(vp)
+    _dept_need_single_list_hrbp = {d for d in _single_list_depts_hrbp if d in _dept_to_vps_hrbp and not any(vp in exec_by_name for vp in _dept_to_vps_hrbp[d])}
+    for d in sorted(_dept_need_single_list_hrbp):
+        dv = dept_stats_for_detail.get(d, {})
+        if not dv or dv.get("total", 0) == 0:
+            continue
+        dept_rows.append(_row(d, "总", dv["total"], dv["done"], dv["grades"], indent=0))
+        if (dv.get("sales_total") or 0) > 0 and (dv.get("non_sales_total") or 0) > 0:
+            dept_rows.append(_row(d, "销售", dv["sales_total"], dv["sales_done"], dv.get("sales_grades", dv["grades"]), indent=1))
+            dept_rows.append(_row(d, "非销售", dv["non_sales_total"], dv["non_sales_done"], dv.get("non_sales_grades", dv["grades"]), indent=1))
+    for vp_name in sorted(vp_to_depts.keys()):
+        if vp_name in exec_by_name and vp_name in exec_responsible:
+            dval = exec_by_name[vp_name]
+            if dval["total"] > 0:
+                dept_rows.append(_row(f"高管（{vp_name}）", "总", dval["total"], dval["done"], dval["grades"], indent=0))
+                if (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0:
+                    dept_rows.append(_row(f"高管（{vp_name}）", "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"]), indent=1))
+                    dept_rows.append(_row(f"高管（{vp_name}）", "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"]), indent=1))
+        for exec_name in sorted(exec_by_name.keys()):
+            if exec_name == vp_name or exec_name in exec_responsible:
+                continue
+            if vp_name not in exec_to_vps.get(exec_name, set()):
+                continue
+            dval = exec_by_name[exec_name]
+            if dval["total"] > 0:
+                dept_rows.append(_row(f"高管（{exec_name}）", "总", dval["total"], dval["done"], dval["grades"], indent=1))
+                if (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0:
+                    dept_rows.append(_row(f"高管（{exec_name}）", "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"]), indent=2))
+                    dept_rows.append(_row(f"高管（{exec_name}）", "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"]), indent=2))
+        for dept_name in sorted(vp_to_depts.get(vp_name, [])):
+            if dept_name in _dept_need_single_list_hrbp:
+                continue
+            dval = dept_stats_for_detail.get(dept_name, {})
+            if not dval or dval.get("total", 0) == 0:
+                continue
+            dept_rows.append(_row(dept_name, "总", dval["total"], dval["done"], dval["grades"], indent=1))
+            if (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0:
+                dept_rows.append(_row(dept_name, "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"]), indent=2))
+                dept_rows.append(_row(dept_name, "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"]), indent=2))
+    _hrbp_shown = set()
+    for row in dept_rows:
+        d = str(row.get("部门", ""))
+        if "高管（" in d and "）" in d:
+            beg = d.index("高管（") + 3
+            end = d.index("）", beg)
+            _hrbp_shown.add(d[beg:end].strip())
+    for exec_name in sorted(exec_by_name.keys()):
+        if exec_name in _hrbp_shown:
+            continue
+        dval = exec_by_name[exec_name]
+        if dval["total"] > 0:
+            dept_rows.append(_row(f"高管（{exec_name}）", "总", dval["total"], dval["done"], dval["grades"], indent=0))
+            if (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0:
+                dept_rows.append(_row(f"高管（{exec_name}）", "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"]), indent=1))
+                dept_rows.append(_row(f"高管（{exec_name}）", "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"]), indent=1))
     dept_df = pd.DataFrame(dept_rows)
     if not dept_df.empty:
         def _dept_row_style(row):
             scope = row.get("口径", "")
+            dept = str(row.get("部门", ""))
+            if "高管（" in dept:
+                if scope == "总":
+                    return ["font-weight: 700; font-size: 14px; background-color: rgba(255,193,7,0.12); color: #FFC107;"] * len(row)
+                if scope == "销售":
+                    return ["font-size: 12px; color: #81C784; background-color: rgba(255,193,7,0.06);"] * len(row)
+                if scope == "非销售":
+                    return ["font-size: 12px; color: #64B5F6; background-color: rgba(255,193,7,0.06);"] * len(row)
             if scope == "总":
                 return ["font-weight: 700; font-size: 14px; background-color: rgba(255,255,255,0.06);"] * len(row)
             if scope == "销售":
@@ -2081,6 +2815,7 @@ def _render_hrbp_dashboard():
             return [""] * len(row)
         dept_df = dept_df.style.set_properties(**{"text-align": "center"}).apply(_dept_row_style, axis=1)
     st.dataframe(dept_df, use_container_width=True, hide_index=True)
+    st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 提示：各部门含一级部门负责人，高管单列；如果一级部门负责人和高管为同一人，则一级部门中不含，高管单列。</div>", unsafe_allow_html=True)
 
     st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
     st.markdown("<div class='module-title' style='text-align:center;'>📥 数据下载</div>", unsafe_allow_html=True)
@@ -2182,17 +2917,19 @@ def _load_demo_users_from_files(candidate_files):
 def load_demo_users(demo_dept=None):
     """
     读取本地 demo 用户配置。
-    demo_dept: None 或 "all" -> 合并三个部门（人力资源部、研发质量保障部、财富顾问部）
+    demo_dept: None 或 "all" -> 合并四个部门（人力资源部、研发质量保障部、财富顾问部、资产管理部）
     demo_dept: "hr" -> 人力资源部 (demo_users_hr.json)
     demo_dept: "wealth" -> 财富顾问部 (demo_users_wealth.json)
     demo_dept: "rd" -> 研发质量保障部 (demo_users.json)
+    demo_dept: "asset" -> 资产管理部 (demo_users_asset.json)
     """
     if demo_dept in (None, "", "all"):
-        # 合并三个部门：依次读取，按 open_id 去重
+        # 合并四个部门：依次读取，按 open_id 去重
         file_sets = [
             ["demo_users_hr.json", "demo_users_hr.example.json"],
             ["demo_users_wealth.json", "demo_users_wealth.example.json"],
             ["demo_users.json", "demo_users.example.json"],
+            ["demo_users_asset.json", "demo_users_asset.example.json"],
         ]
         seen_open_ids = set()
         raw_users = []
@@ -2208,6 +2945,8 @@ def load_demo_users(demo_dept=None):
             candidate_files = ["demo_users_hr.json", "demo_users_hr.example.json"]
         elif demo_dept == "wealth":
             candidate_files = ["demo_users_wealth.json", "demo_users_wealth.example.json"]
+        elif demo_dept == "asset":
+            candidate_files = ["demo_users_asset.json", "demo_users_asset.example.json"]
         else:
             candidate_files = ["demo_users.json", "demo_users.example.json"]
         raw_users = _load_demo_users_from_files(candidate_files)
@@ -2253,9 +2992,9 @@ def login_page():
 
     if show_demo_only:
         dept_label = (
-            "人力资源部、研发质量保障部、财富顾问部"
+            "人力资源部、研发质量保障部、财富顾问部、资产管理部"
             if demo_dept in (None, "", "all")
-            else {"hr": "人力资源部", "wealth": "财富顾问部", "rd": "研发质量保障部"}.get(demo_dept, "研发质量保障部")
+            else {"hr": "人力资源部", "wealth": "财富顾问部", "rd": "研发质量保障部", "asset": "资产管理部"}.get(demo_dept, "研发质量保障部")
         )
         st.markdown("### 🎬 演示测试入口")
         st.caption(f"选择真实员工账号进行演示登录（{dept_label}）")
@@ -2312,7 +3051,7 @@ def login_page():
                     st.query_params.clear()
                     st.rerun()
     elif not show_demo_only:
-        encoded_uri = urllib.parse.quote(REDIRECT_URI)
+        encoded_uri = urllib.parse.quote(str(REDIRECT_URI or ""))
         base_url = "https://open.feishu.cn/open-apis/authen/v1/user_auth_page_beta"
         auth_url = base_url + f"?app_id={APP_ID}&redirect_uri={encoded_uri}&state=testing"
 
@@ -2453,11 +3192,13 @@ def login_page():
 
         if not demo_users:
             if demo_dept in (None, "", "all"):
-                st.info("💡 提示：未读取到任一 demo 用户文件。可运行 `python3 get_open_ids.py 人力资源部`、`python3 get_open_ids.py 研发质量保障部`、`python3 get_open_ids.py 财富顾问部` 分别生成对应 JSON。")
+                st.info("💡 提示：未读取到任一 demo 用户文件。可运行 `python3 get_open_ids.py 人力资源部`、`python3 get_open_ids.py 研发质量保障部`、`python3 get_open_ids.py 财富顾问部`、`python3 get_open_ids.py 资产管理部` 分别生成对应 JSON。")
             elif demo_dept == "hr":
                 st.info("💡 提示：未读取到 demo_users_hr.json，可运行 `python3 get_open_ids.py 人力资源部` 生成。")
             elif demo_dept == "wealth":
                 st.info("💡 提示：未读取到 demo_users_wealth.json，可运行 `python3 get_open_ids.py 财富顾问部` 生成。")
+            elif demo_dept == "asset":
+                st.info("💡 提示：未读取到 demo_users_asset.json，可运行 `python3 get_open_ids.py 资产管理部 > demo_users_asset.json` 生成。")
             else:
                 st.info("💡 提示：未读取到 demo_users.json，可参考 demo_users.example.json 创建本地测试账号。")
         if show_demo_only:
@@ -2471,7 +3212,7 @@ def return_to_self():
     st.session_state.selected_subordinate_id = None
 
 # --- 主应用逻辑 ---
-def main_app():
+def main_app():  # pyright: ignore[reportGeneralTypeIssues]
     # --- 注入自定义 CSS ---
     st.markdown("""
     <style>
@@ -2738,6 +3479,8 @@ def main_app():
     div:has(.hrbp-view-container) ~ div [data-testid="stCaptionContainer"],
     div:has(.hrbp-view-container) ~ div [data-testid="stCaptionContainer"] p,
     div:has(.hrbp-view-container) ~ div [data-testid="column"] { text-align: center !important; }
+    /* HRBP 两行标题：强制居左（提高特异性以覆盖上方居中规则） */
+    div:has(.hrbp-view-container) ~ div [data-testid="stMarkdown"] p.hrbp-left-label { text-align: left !important; }
     div:has(.hrbp-view-container) ~ div div[data-testid="column"] > div { justify-content: center !important; align-items: center !important; }
     .hrbp-view-container { display: none !important; }
 
@@ -2921,10 +3664,15 @@ def main_app():
         background: #FFA726 !important;
         color: #1a1a1a !important;
     }
-    .mgr-sub-list div.element-container:has(.xqps-btn-view) + div.element-container button,
-    div.element-container:has(.xqps-btn-collapse) + div.element-container button {
+    .mgr-sub-list div.element-container:has(.xqps-btn-view) + div.element-container button {
         background: #42A5F5 !important;
         color: #ffffff !important;
+    }
+    /* 上级评分「收起面板」：透明样式 */
+    div.element-container:has(.xqps-btn-collapse) + div.element-container button {
+        background: transparent !important;
+        color: #ffffff !important;
+        border: 1px solid rgba(255,255,255,0.25) !important;
     }
     /* 团队历史绩效「直属」按钮：蓝色 #4799e4，字体小两级 */
     div.element-container:has(.history-direct-btn-marker) {
@@ -3071,6 +3819,66 @@ def main_app():
         background: transparent !important;
         box-shadow: none !important;
     }
+    /* 回到顶端悬浮按钮：上级评分、一级部门负责人调整、分管高管调整页右下角 */
+    .back-to-top-btn {
+        position: fixed !important;
+        bottom: 24px !important;
+        right: 24px !important;
+        z-index: 9999 !important;
+        padding: 10px 18px !important;
+        font-size: 14px !important;
+        font-weight: 600 !important;
+        color: rgba(255, 255, 255, 0.85) !important;
+        background: rgba(0, 0, 0, 0.25) !important;
+        border: 1px solid rgba(255, 255, 255, 0.25) !important;
+        border-radius: 8px !important;
+        cursor: pointer !important;
+        box-shadow: none !important;
+        transition: background 0.2s, transform 0.15s !important;
+        text-decoration: none !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 6px !important;
+        font-family: inherit !important;
+        -webkit-appearance: none !important;
+        appearance: none !important;
+        backdrop-filter: blur(8px) !important;
+    }
+    .back-to-top-btn:hover {
+        background: rgba(0, 0, 0, 0.4) !important;
+        color: #ffffff !important;
+        transform: translateY(-2px) !important;
+        border-color: rgba(255, 255, 255, 0.35) !important;
+    }
+    .back-to-top-btn:active {
+        transform: translateY(0) !important;
+    }
+    html { scroll-behavior: smooth !important; }
+    /* 一级部门负责人：点击🔗后的提示，2秒后淡出消失 */
+    @keyframes dept-hint-fadeout {
+        0%, 80% { opacity: 1; max-height: 80px; }
+        100% { opacity: 0; max-height: 0; overflow: hidden; padding: 0; margin: 0; }
+    }
+    .dept-view-hint-2s {
+        animation: dept-hint-fadeout 2.5s ease-in forwards;
+    }
+    /* 一级部门负责人/分管高管调整：自评等级列🔗按钮缩小，边框透明，自评等级不断行 */
+    button[class*="dept-view-self"],
+    button[class*="dept_view_self"],
+    button[class*="vp-view-self"],
+    button[class*="vp_view_self"] {
+        min-width: 28px !important;
+        width: 28px !important;
+        min-height: 28px !important;
+        height: 28px !important;
+        padding: 0 !important;
+        font-size: 12px !important;
+        background: transparent !important;
+        background-color: transparent !important;
+        border: none !important;
+        border-color: transparent !important;
+        box-shadow: none !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -3115,7 +3923,7 @@ def main_app():
         d4 = normalize_dept_text(fields_obj.get("四级部门"))
         return "-".join([d for d in [d2, d3, d4] if d]).strip("-").strip()
 
-    def action_button(action_type, label, key, use_container_width=True, disabled=False, on_click=None):
+    def action_button(action_type, label, key, use_container_width=True, disabled=False, on_click=None, help=None):
         """
         统一的文本按钮：填充色块 + 文字，配合 CSS 控制颜色与对齐。
         action_type 仅用于打上标记 class，具体样式在全局 CSS 中统一控制。
@@ -3130,6 +3938,7 @@ def main_app():
             use_container_width=use_container_width,
             disabled=disabled,
             on_click=on_click,
+            help=help,
         )
 
     # 管理员：全公司绩效视图（复制视图与报表格式）
@@ -3237,90 +4046,6 @@ def main_app():
         or "2026年上半年"
     )
     current_cycle = _read_admin_cycle_override() or _cycle_from_record
-    # 公告用：考核周期统一为展示格式（如 2026年上半年）
-    cycle_for_announce = _normalize_cycle_display(current_cycle) or current_cycle
-    deadline_raw = fields.get("自评提交截止日期")
-    deadline_display = ""
-    if deadline_raw is not None:
-        if isinstance(deadline_raw, (int, float)):
-            try:
-                ts = int(deadline_raw) / 1000 if deadline_raw > 1e12 else int(deadline_raw)
-                dt = datetime.fromtimestamp(ts)
-                deadline_display = dt.strftime("%Y年%m月%d日")
-            except Exception:
-                deadline_display = str(deadline_raw)
-        else:
-            s = extract_text(deadline_raw, "").strip()
-            if s:
-                for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
-                    try:
-                        dt = datetime.strptime(s[:10], fmt)
-                        deadline_display = dt.strftime("%Y年%m月%d日")
-                        break
-                    except ValueError:
-                        continue
-                else:
-                    deadline_display = s
-    if not deadline_display:
-        deadline_display = "截止日期"
-    # 上级评分公告用：上级评价提交截止日期
-    mgr_deadline_raw = fields.get("上级评价提交截止日期")
-    mgr_deadline_display = ""
-    if mgr_deadline_raw is not None:
-        if isinstance(mgr_deadline_raw, (int, float)):
-            try:
-                ts = int(mgr_deadline_raw) / 1000 if mgr_deadline_raw > 1e12 else int(mgr_deadline_raw)
-                dt = datetime.fromtimestamp(ts)
-                mgr_deadline_display = dt.strftime("%Y年%m月%d日")
-            except Exception:
-                mgr_deadline_display = str(mgr_deadline_raw)
-        else:
-            s = extract_text(mgr_deadline_raw, "").strip()
-            if s:
-                for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
-                    try:
-                        dt = datetime.strptime(s[:10], fmt)
-                        mgr_deadline_display = dt.strftime("%Y年%m月%d日")
-                        break
-                    except ValueError:
-                        continue
-                else:
-                    mgr_deadline_display = s
-    if not mgr_deadline_display:
-        mgr_deadline_display = "截止日期"
-    # 一级部门负责人/分管高管公告用
-    def _parse_deadline(raw, default="截止日期"):
-        if raw is None:
-            return default
-        if isinstance(raw, (int, float)):
-            try:
-                ts = int(raw) / 1000 if raw > 1e12 else int(raw)
-                dt = datetime.fromtimestamp(ts)
-                return dt.strftime("%Y年%m月%d日")
-            except Exception:
-                return str(raw)
-        s = extract_text(raw, "").strip()
-        if not s:
-            return default
-        for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
-            try:
-                dt = datetime.strptime(s[:10], fmt)
-                return dt.strftime("%Y年%m月%d日")
-            except ValueError:
-                continue
-        return s
-    def _get_deadline_from_fields(f, *keys):
-        for k in keys:
-            v = _parse_deadline(f.get(k), None)
-            if v and v != "截止日期":
-                return v
-        return "截止日期"
-    dept_head_deadline_display = _get_deadline_from_fields(
-        fields, "一级部门负责人提交截止日期", "部门负责人提交截止日期", "一级部门负责人截止日期"
-    )
-    vp_deadline_display = _get_deadline_from_fields(
-        fields, "分管高管提交截止日期", "高管提交截止日期", "分管高管截止日期"
-    )
     dept_parts = [d for d in [extract_text(fields.get(f'{k}级部门'), "") for k in ["一", "二", "三", "四"]] if d and d != "未获取"]
     department = "-".join(dept_parts) if dept_parts else "未获取"
     manager = extract_text(fields.get('直接评价人') or fields.get('评价人'))
@@ -3431,6 +4156,10 @@ def main_app():
     if st.session_state.role == "管理者":
         if current_tab == "📝 员工自评" or current_tab is None:
             st.session_state.selected_subordinate_id = None
+        if current_tab != "📌 一级部门负责人调整":
+            st.session_state.pop("dept_view_self_record_id", None)
+        if current_tab != "📌 分管高管调整":
+            st.session_state.pop("vp_view_self_record_id", None)
 
     is_evaluating_sub = (st.session_state.role == "管理者" and st.session_state.selected_subordinate_id is not None)
     step2_can_submit = False
@@ -3525,6 +4254,7 @@ def main_app():
         _final_grade = "-"
         _final_comment = ""
         if _can_see_result:
+            # 开放查看时：不论自评/上级评分/分管高管调整状态，均读取并展示当前最佳可得值
             vp_done = extract_text(fields.get("分管高管调整完毕"), "").strip() == "是"
             dept_done = extract_text(fields.get("一级部门调整完毕"), "").strip() == "是"
             vp_adj = extract_text(fields.get("分管高管调整考核结果"), "").strip()
@@ -3539,8 +4269,13 @@ def main_app():
             _final_comment = extract_text(fields.get("考核评语", ""), "").strip()
             if _final_comment in ["", "未获取", "None", "0"]:
                 _final_comment = ""
-        _final_grade_disp = _final_grade if _can_see_result and _final_grade in GRADE_OPTIONS else "待审批"
-        _final_comment_disp = (_final_comment.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") if _can_see_result and _final_comment else "待审批")
+        # 开放查看时展示实际值（含"-"/"暂无"）；未开放时展示"待审批"
+        _final_grade_disp = _final_grade if _can_see_result else "待审批"
+        _final_comment_disp = (
+            _final_comment.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            if _can_see_result and _final_comment
+            else ("暂无" if _can_see_result else "待审批")
+        )
         _grade_style = "color: #1E90FF; font-weight: bold; font-size: 18px;" if _can_see_result and _final_grade in GRADE_OPTIONS else "color: #757575;"
         _grade_row_style = "color: #757575;" if not (_can_see_result and _final_grade in GRADE_OPTIONS) else "color: #FAFAFA;"
         _comment_style = "color: #FAFAFA; font-size: 15px;" if _can_see_result and _final_comment else "color: #757575;"
@@ -3614,6 +4349,9 @@ def main_app():
         else:
             tab_list = ["📝 员工自评", "📂 团队历史绩效"]
 
+    # 回到顶端锚点：供下方悬浮按钮使用
+    if st.session_state.role == "管理者":
+        st.markdown('<div id="page-top" style="height:0;overflow:hidden;margin:0;padding:0;line-height:0;"></div>', unsafe_allow_html=True)
     tabs = st.tabs(tab_list, key="main_tabs", on_change="rerun")
     idx_self = 0
     idx_mgr = 1 if st.session_state.role == "管理者" else 0
@@ -3645,14 +4383,12 @@ def main_app():
             _ann_self = _read_admin_announcement("员工自评")
             if _ann_self:
                 _ann_body = _ann_self.replace("\n", "<br>")
-            else:
-                _ann_body = f"""亲爱的雪球er！<br>感谢您参与雪球绩效考核！<br>请秉承实事求是、客观公正的态度，对「<strong style="color:#FFD54F;">{cycle_for_announce}</strong>」工作目标复盘并对工作得失进行总结。自评前请仔细阅读左侧导航栏下方的「<strong style="color:#90CAF9;">📚 制度学习</strong>」模块，并在「<strong style="color:#FFD54F;">{deadline_display} 18:30</strong>」前提交自评。"""
-            st.markdown(f"""
-            <div style="margin: 12px 0 16px 0; padding: 14px 16px; background: rgba(33, 150, 243, 0.12); border-radius: 8px; border-left: 4px solid #2196F3; font-size: 14px; line-height: 1.7; color: #E0E0E0;">
-                <div style="font-weight: 600; margin-bottom: 8px; color: #90CAF9;">📢 公告</div>
-                <div>{_ann_body}</div>
-            </div>
-            """, unsafe_allow_html=True)
+                st.markdown(f"""
+                <div style="margin: 12px 0 16px 0; padding: 14px 16px; background: rgba(33, 150, 243, 0.12); border-radius: 8px; border-left: 4px solid #2196F3; font-size: 14px; line-height: 1.7; color: #E0E0E0;">
+                    <div style="font-weight: 600; margin-bottom: 8px; color: #90CAF9;">📢 公告</div>
+                    <div>{_ann_body}</div>
+                </div>
+                """, unsafe_allow_html=True)
             if is_submitted:
                 st.success("🔒 您的自评已提交，当前表单不可修改。")
             _self_no_edit = is_submitted or _self_edit_disabled
@@ -3795,33 +4531,17 @@ def main_app():
                         grade_list.append(current_grade)
                         
                 unrated_subs = total_subs - rated_subs - drafted_subs
-                
-                # 截止日期：优先当前用户记录，否则从下属或全表记录中取（含备用列名）
-                _mgr_deadline = mgr_deadline_display
-                if _mgr_deadline == "截止日期":
-                    _mgr_keys = ("上级评价提交截止日期", "上级评分截止日期", "上级截止日期")
-                    for src in (my_all_subs, all_records_snapshot or []):
-                        for rec in src:
-                            f = rec.get("fields", {})
-                            for k in _mgr_keys:
-                                v = _parse_deadline(f.get(k), None)
-                                if v and v != "截止日期":
-                                    _mgr_deadline = v
-                                    break
-                            if _mgr_deadline != "截止日期":
-                                break
-                        if _mgr_deadline != "截止日期":
-                            break
 
-                # 上级评分公告
+                # 上级评分公告（仅展示管理员发布内容，不再从飞书抓取）
                 _ann_mgr = _read_admin_announcement("上级评分")
-                _mgr_ann_body = (_ann_mgr.replace("\n", "<br>") if _ann_mgr else f"请于「<strong style=\"color:#FFD54F;\">{_mgr_deadline} 18:30</strong>」前提交上级评分！")
-                st.markdown(f"""
-                <div style="margin: 0 0 16px 0; padding: 14px 16px; background: rgba(33, 150, 243, 0.12); border-radius: 8px; border-left: 4px solid #2196F3; font-size: 14px; line-height: 1.7; color: #E0E0E0;">
-                    <div style="font-weight: 600; margin-bottom: 8px; color: #90CAF9;">📢 公告</div>
-                    <div>{_mgr_ann_body}</div>
-                </div>
-                """, unsafe_allow_html=True)
+                if _ann_mgr:
+                    _mgr_ann_body = _ann_mgr.replace("\n", "<br>")
+                    st.markdown(f"""
+                    <div style="margin: 0 0 16px 0; padding: 14px 16px; background: rgba(33, 150, 243, 0.12); border-radius: 8px; border-left: 4px solid #2196F3; font-size: 14px; line-height: 1.7; color: #E0E0E0;">
+                        <div style="font-weight: 600; margin-bottom: 8px; color: #90CAF9;">📢 公告</div>
+                        <div>{_mgr_ann_body}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
                 # 模块 1：下属评估进展（单列）- 样式参照实际人数表格：16px 粗体，标签灰 #b7bdc8，数字配色
                 st.markdown("<div class='module-title'>👥 下属评估进展</div>", unsafe_allow_html=True)
                 st.markdown(
@@ -3845,8 +4565,6 @@ def main_app():
                 if not my_all_subs:
                     st.info("💡 提示：当前暂无下属。")
                 else:
-                    if st.session_state.pop("mgr_scroll_hint", False):
-                        st.info("💡提示：请滚动鼠标，在人员列表下方查看或评价下属哦~")
                     # 顶部筛选：与综合调整统一（工号姓名 / 部门 / 状态 / 考核等级）
                     f1, f2, f3, f4 = st.columns(4, gap="small")
                     q_name_emp = f1.text_input(
@@ -4078,21 +4796,17 @@ def main_app():
                         with c6:
                             if action_type == "remind":
                                 if action_button("remind", "提醒", key=f"btn_remind_{s_id}"):
-                                    st.session_state.mgr_scroll_hint = True
                                     st.rerun()
                             elif action_type == "view":
-                                if action_button("view", "查看", key=f"btn_view_{s_id}"):
-                                    st.session_state.mgr_scroll_hint = True
+                                if action_button("view", "查看", key=f"btn_view_{s_id}", help="在页面下端查看自评"):
                                     jump_to_subordinate(s_id)
                                     st.rerun()
                             elif action_type == "adjust":
                                 if action_button("adjust", "去调整", key=f"btn_adjust_{s_id}"):
-                                    st.session_state.mgr_scroll_hint = True
                                     jump_to_subordinate(s_id)
                                     st.rerun()
                             else:
                                 if action_button("evaluate", "去评价", key=f"btn_jump_{s_id}"):
-                                    st.session_state.mgr_scroll_hint = True
                                     jump_to_subordinate(s_id)
                                     st.rerun()
                         st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
@@ -4295,28 +5009,15 @@ def main_app():
 
                             modified_cnt += 1
 
-                    # 截止日期：优先当前用户记录，否则从任意记录中取（含备用列名）
-                    _dh_deadline = dept_head_deadline_display
-                    if _dh_deadline == "截止日期":
-                        _dh_keys = ("一级部门负责人提交截止日期", "部门负责人提交截止日期", "一级部门负责人截止日期")
-                        for rec in all_records:
-                            f = rec.get("fields", {})
-                            for k in _dh_keys:
-                                v = _parse_deadline(f.get(k), None)
-                                if v and v != "截止日期":
-                                    _dh_deadline = v
-                                    break
-                            if _dh_deadline != "截止日期":
-                                break
-
                     _ann_dh = _read_admin_announcement("一级部门负责人调整")
-                    _dh_ann_body = (_ann_dh.replace("\n", "<br>") if _ann_dh else f"请于「<strong style=\"color:#FFD54F;\">{_dh_deadline} 18:30</strong>」前确定调整。")
-                    st.markdown(f"""
-                    <div style="margin: 0 0 16px 0; padding: 14px 16px; background: rgba(33, 150, 243, 0.12); border-radius: 8px; border-left: 4px solid #2196F3; font-size: 14px; line-height: 1.7; color: #E0E0E0;">
-                        <div style="font-weight: 600; margin-bottom: 8px; color: #90CAF9;">📢 公告</div>
-                        <div>{_dh_ann_body}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    if _ann_dh:
+                        _dh_ann_body = _ann_dh.replace("\n", "<br>")
+                        st.markdown(f"""
+                        <div style="margin: 0 0 16px 0; padding: 14px 16px; background: rgba(33, 150, 243, 0.12); border-radius: 8px; border-left: 4px solid #2196F3; font-size: 14px; line-height: 1.7; color: #E0E0E0;">
+                            <div style="font-weight: 600; margin-bottom: 8px; color: #90CAF9;">📢 公告</div>
+                            <div>{_dh_ann_body}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
                     st.markdown("<div class='module-title'>📌 一级部门负责人调整进展</div>", unsafe_allow_html=True)
 
                     st.markdown(
@@ -4422,9 +5123,10 @@ def main_app():
 
                             has_adj_grade = adj_grade in GRADE_OPTIONS
 
-                            is_modified_not_submitted = (not done_flag and has_mgr_grade and adj_grade in GRADE_OPTIONS and adj_grade != mgr_grade)
+                            # 已改 = 调整等级与上级评分不同（不论是否已确认，确认后仍可筛出）
+                            is_modified = has_mgr_grade and adj_grade in GRADE_OPTIONS and adj_grade != mgr_grade
 
-                            status = "未自评" if not self_submitted else ("已完成调整" if done_flag else ("已改" if is_modified_not_submitted else ("待调整" if has_mgr_grade else "待上级评分")))
+                            status = "未自评" if not self_submitted else ("已完成调整" if done_flag else ("已改" if is_modified else ("待调整" if has_mgr_grade else "待上级评分")))
 
                             if q1 and (q1 not in name.lower() and q1 not in emp.lower()):
 
@@ -4434,9 +5136,12 @@ def main_app():
 
                                 continue
 
-                            if q_status != "全部状态" and q_status != status:
-
-                                continue
+                            if q_status != "全部状态":
+                                if q_status == "已改":
+                                    if not is_modified:
+                                        continue
+                                elif q_status != status:
+                                    continue
 
                             if q_mgr_grade != "全部调整等级":
 
@@ -4576,7 +5281,6 @@ def main_app():
                         h2.markdown("<div class='sub-list-head'>子部门/岗位</div>", unsafe_allow_html=True)
 
                         h3.markdown("<div class='sub-list-head'>自评等级</div>", unsafe_allow_html=True)
-
                         h4.markdown("<div class='sub-list-head'>考核等级</div>", unsafe_allow_html=True)
 
                         h5.markdown("<div class='sub-list-head' style='color:#66b2ff; font-weight:800;'>调整等级</div>", unsafe_allow_html=True)
@@ -4632,7 +5336,14 @@ def main_app():
 
                             )
 
-                            c3.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center;'>{self_grade}</div>", unsafe_allow_html=True)
+                            with c3:
+                                _gc3a, _gc3b = st.columns([2, 1], vertical_alignment="center")
+                                with _gc3a:
+                                    st.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center; white-space:nowrap;'>{self_grade}</div>", unsafe_allow_html=True)
+                                with _gc3b:
+                                    if st.button("🔗", key=f"dept_view_self_{r_id}", help="在页面下端查看自评"):
+                                        st.session_state.dept_view_self_record_id = r_id
+                                        st.rerun()
 
                             c4.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center;'>{mgr_grade}</div>", unsafe_allow_html=True)
 
@@ -4724,6 +5435,69 @@ def main_app():
 
                         st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
 
+                    # 一级部门负责人：查看自评面板（仅在本 tab 激活且有选择时渲染，避免影响分管高管 tab）
+                    if current_tab == "📌 一级部门负责人调整" and is_dept_head:
+                        _dept_view_id = st.session_state.get("dept_view_self_record_id")
+                        if _dept_view_id:
+                            st.markdown(
+                                "<div class='dept-view-hint-2s' style='margin:8px 0 12px 0; padding:8px 12px; background:rgba(33,150,243,0.15); border-radius:6px; font-size:13px; color:#90CAF9;'>💡 提示：请滚动鼠标，在人员列表下方查看或评价下属哦~</div>",
+                                unsafe_allow_html=True,
+                            )
+                            _view_rec = next((r for r in dept_head_records if r.get("record_id") == _dept_view_id), None)
+                            if _view_rec:
+                                _vf = _view_rec.get("fields", {})
+                                _vname = extract_text(_vf.get("姓名"), "未知").strip()
+                                _vemp = extract_text(_vf.get("工号") or _vf.get("员工工号"), "").strip()
+                                _vjob = extract_text(_vf.get("岗位") or _vf.get("职位"), "未分配").strip()
+                                _vscore = str(_vf.get("自评得分", "暂无"))
+                                _vgrade = str(_vf.get("自评等级", "暂无"))
+                                _col1, _col2 = st.columns([3, 1])
+                                with _col1:
+                                    st.markdown(f"<div class='module-title'>👤 查看自评：{_vname}</div>", unsafe_allow_html=True)
+                                    st.markdown(
+                                        f"""<div style='font-size:14px; color:#E0E0E0; margin-top:6px; line-height:1.6;'>
+                                            <div>工号：{_vemp}</div>
+                                            <div>岗位：{_vjob}</div>
+                                            <div>自评得分：{_vscore}</div>
+                                            <div>自评等级：{_vgrade}</div>
+                                        </div>""",
+                                        unsafe_allow_html=True,
+                                    )
+                                with _col2:
+                                    if st.button("收起面板", key="dept_collapse_self_view"):
+                                        st.session_state.pop("dept_view_self_record_id", None)
+                                        st.rerun()
+                                st.markdown("---")
+                                st.markdown("<div class='module-title'>💼 工作模块</div>", unsafe_allow_html=True)
+                                _gcnt = 3
+                                for _gi in range(5, 3, -1):
+                                    if _vf.get(f"工作目标{_gi}及总结") or _vf.get(f"工作目标{_gi}权重", 0):
+                                        _gcnt = _gi
+                                        break
+                                for _gi in range(1, _gcnt + 1):
+                                    _obj = extract_text(_vf.get(f"工作目标{_gi}及总结"), "未填写").strip() or "未填写"
+                                    _w = _vf.get(f"工作目标{_gi}权重", 0)
+                                    _sw = int(float(_w)) if _w is not None else 0
+                                    _sc = _vf.get(f"工作目标{_gi}自评得分", 0.0)
+                                    _sc_str = str(_sc) if _sc is not None else "-"
+                                    st.markdown(f"**🎯 工作目标{_gi}及总结** <span style='font-size:14px; color:#888;'>(权重: {_sw}% | 自评: {_sc_str}分)</span>", unsafe_allow_html=True)
+                                    st.text_area("_", value=_obj, height=80, disabled=True, key=f"dept_view_obj_{_gi}_{_dept_view_id}", label_visibility="collapsed")
+                                st.markdown("<div class='module-title'>🧠 通用能力模块</div>", unsafe_allow_html=True)
+                                _comp = extract_text(_vf.get("通用能力总结"), "未填写").strip() or "未填写"
+                                _comp_sc = _vf.get("通用能力自评得分", 0.0)
+                                _comp_str = str(_comp_sc) if _comp_sc is not None else "-"
+                                st.markdown(f"**🧠 通用能力总结** <span style='font-size:14px; color:#888;'>(自评: {_comp_str}分)</span>", unsafe_allow_html=True)
+                                st.text_area("_", value=_comp, height=100, disabled=True, key=f"dept_view_comp_{_dept_view_id}", label_visibility="collapsed")
+                                _vrole = extract_text(_vf.get("角色", "")).strip()
+                                if _vrole == "管理者":
+                                    st.markdown("<div class='module-title'>👑 领导力模块</div>", unsafe_allow_html=True)
+                                    _lead = extract_text(_vf.get("领导力总结"), "未填写").strip() or "未填写"
+                                    _lead_sc = _vf.get("领导力自评得分", 0.0)
+                                    _lead_str = str(_lead_sc) if _lead_sc is not None else "-"
+                                    st.markdown(f"**👑 领导力总结** <span style='font-size:14px; color:#888;'>(自评: {_lead_str}分)</span>", unsafe_allow_html=True)
+                                    st.text_area("_", value=_lead, height=100, disabled=True, key=f"dept_view_lead_{_dept_view_id}", label_visibility="collapsed")
+                                st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
+
         # ===== 分管高管调整（一级导航） =====
         if idx_vp is not None:
             with tabs[idx_vp]:
@@ -4751,26 +5525,15 @@ def main_app():
                         vp_base = vp_base if vp_base in GRADE_OPTIONS else mgr_g
                         if vp_base in GRADE_OPTIONS and adj_g in GRADE_OPTIONS and adj_g != vp_base:
                             modified_cnt += 1
-                    _vp_deadline = vp_deadline_display
-                    if _vp_deadline == "截止日期":
-                        _vp_keys = ("分管高管提交截止日期", "高管提交截止日期", "分管高管截止日期")
-                        for rec in all_records:
-                            f = rec.get("fields", {})
-                            for k in _vp_keys:
-                                v = _parse_deadline(f.get(k), None)
-                                if v and v != "截止日期":
-                                    _vp_deadline = v
-                                    break
-                            if _vp_deadline != "截止日期":
-                                break
                     _ann_vp = _read_admin_announcement("分管高管调整")
-                    _vp_ann_body = (_ann_vp.replace("\n", "<br>") if _ann_vp else f"请于「<strong style=\"color:#FFD54F;\">{_vp_deadline} 18:30</strong>」前确定调整。")
-                    st.markdown(f"""
-                    <div style="margin: 0 0 16px 0; padding: 14px 16px; background: rgba(33, 150, 243, 0.12); border-radius: 8px; border-left: 4px solid #2196F3; font-size: 14px; line-height: 1.7; color: #E0E0E0;">
-                        <div style="font-weight: 600; margin-bottom: 8px; color: #90CAF9;">📢 公告</div>
-                        <div>{_vp_ann_body}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    if _ann_vp:
+                        _vp_ann_body = _ann_vp.replace("\n", "<br>")
+                        st.markdown(f"""
+                        <div style="margin: 0 0 16px 0; padding: 14px 16px; background: rgba(33, 150, 243, 0.12); border-radius: 8px; border-left: 4px solid #2196F3; font-size: 14px; line-height: 1.7; color: #E0E0E0;">
+                            <div style="font-weight: 600; margin-bottom: 8px; color: #90CAF9;">📢 公告</div>
+                            <div>{_vp_ann_body}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
                     st.markdown("<div class='module-title'>📌 分管高管调整进展</div>", unsafe_allow_html=True)
                     st.markdown(
                     f"""<div style="font-size: 16px; font-weight: 700; margin-bottom: 10px; padding: 10px; background-color: rgba(255,255,255,0.02); border-radius: 6px; border: 1px solid #444;"><div style="display:flex; justify-content:center; gap:18px; flex-wrap:wrap;"><span style="color:#b7bdc8;">覆盖人数（不含评价者本人）：<span style="color:#4CAFEE;">{total_cnt}</span> 人</span><span style="color:#b7bdc8;">调整人数：<span style="color:#8BC34A;">{modified_cnt}</span> 人</span></div></div>""",
@@ -4877,9 +5640,10 @@ def main_app():
 
                         has_adj_grade = adj_grade in GRADE_OPTIONS
 
-                        is_modified_not_submitted = (not done_flag and has_mgr_grade and adj_grade in GRADE_OPTIONS and vp_base_grade in GRADE_OPTIONS and adj_grade != vp_base_grade)
+                        # 已改 = 调整等级Ⅱ与调整等级Ⅰ不同（不论是否已确认，确认后仍可筛出）
+                        is_modified = (vp_base_grade in GRADE_OPTIONS and adj_grade in GRADE_OPTIONS and adj_grade != vp_base_grade)
 
-                        status = "未自评" if not self_submitted else ("已完成调整" if done_flag else ("已改" if is_modified_not_submitted else ("待调整" if has_mgr_grade else "待上级评分")))
+                        status = "未自评" if not self_submitted else ("已完成调整" if done_flag else ("已改" if is_modified else ("待调整" if has_mgr_grade else "待上级评分")))
 
                         if q1 and (q1 not in name.lower() and q1 not in emp.lower()):
 
@@ -4889,9 +5653,12 @@ def main_app():
 
                             continue
 
-                        if q_status != "全部状态" and q_status != status:
-
-                            continue
+                        if q_status != "全部状态":
+                            if q_status == "已改":
+                                if not is_modified:
+                                    continue
+                            elif q_status != status:
+                                continue
 
                         if q_mgr_grade != "全部调整等级":
 
@@ -5094,7 +5861,14 @@ def main_app():
 
                         )
 
-                        c3.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center;'>{self_grade}</div>", unsafe_allow_html=True)
+                        with c3:
+                            _vp_gc3a, _vp_gc3b = st.columns([2, 1], vertical_alignment="center")
+                            with _vp_gc3a:
+                                st.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center; white-space:nowrap;'>{self_grade}</div>", unsafe_allow_html=True)
+                            with _vp_gc3b:
+                                if st.button("🔗", key=f"vp_view_self_{r_id}", help="在页面下端查看自评"):
+                                    st.session_state.vp_view_self_record_id = r_id
+                                    st.rerun()
 
                         c4.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center;'>{mgr_grade_display}</div>", unsafe_allow_html=True)
 
@@ -5186,6 +5960,69 @@ def main_app():
 
                     st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
 
+                    # 分管高管：查看自评面板（仅在本 tab 激活且有选择时渲染）
+                    if current_tab == "📌 分管高管调整":
+                        _vp_view_id = st.session_state.get("vp_view_self_record_id")
+                        if _vp_view_id:
+                            st.markdown(
+                                "<div class='dept-view-hint-2s' style='margin:8px 0 12px 0; padding:8px 12px; background:rgba(33,150,243,0.15); border-radius:6px; font-size:13px; color:#90CAF9;'>💡 提示：请滚动鼠标，在人员列表下方查看或评价下属哦~</div>",
+                                unsafe_allow_html=True,
+                            )
+                            _vp_view_rec = next((r for r in vp_records if r.get("record_id") == _vp_view_id), None)
+                            if _vp_view_rec:
+                                _vf = _vp_view_rec.get("fields", {})
+                                _vname = extract_text(_vf.get("姓名"), "未知").strip()
+                                _vemp = extract_text(_vf.get("工号") or _vf.get("员工工号"), "").strip()
+                                _vjob = extract_text(_vf.get("岗位") or _vf.get("职位"), "未分配").strip()
+                                _vscore = str(_vf.get("自评得分", "暂无"))
+                                _vgrade = str(_vf.get("自评等级", "暂无"))
+                                _col1, _col2 = st.columns([3, 1])
+                                with _col1:
+                                    st.markdown(f"<div class='module-title'>👤 查看自评：{_vname}</div>", unsafe_allow_html=True)
+                                    st.markdown(
+                                        f"""<div style='font-size:14px; color:#E0E0E0; margin-top:6px; line-height:1.6;'>
+                                            <div>工号：{_vemp}</div>
+                                            <div>岗位：{_vjob}</div>
+                                            <div>自评得分：{_vscore}</div>
+                                            <div>自评等级：{_vgrade}</div>
+                                        </div>""",
+                                        unsafe_allow_html=True,
+                                    )
+                                with _col2:
+                                    if st.button("收起面板", key="vp_collapse_self_view"):
+                                        st.session_state.pop("vp_view_self_record_id", None)
+                                        st.rerun()
+                                st.markdown("---")
+                                st.markdown("<div class='module-title'>💼 工作模块</div>", unsafe_allow_html=True)
+                                _gcnt = 3
+                                for _gi in range(5, 3, -1):
+                                    if _vf.get(f"工作目标{_gi}及总结") or _vf.get(f"工作目标{_gi}权重", 0):
+                                        _gcnt = _gi
+                                        break
+                                for _gi in range(1, _gcnt + 1):
+                                    _obj = extract_text(_vf.get(f"工作目标{_gi}及总结"), "未填写").strip() or "未填写"
+                                    _w = _vf.get(f"工作目标{_gi}权重", 0)
+                                    _sw = int(float(_w)) if _w is not None else 0
+                                    _sc = _vf.get(f"工作目标{_gi}自评得分", 0.0)
+                                    _sc_str = str(_sc) if _sc is not None else "-"
+                                    st.markdown(f"**🎯 工作目标{_gi}及总结** <span style='font-size:14px; color:#888;'>(权重: {_sw}% | 自评: {_sc_str}分)</span>", unsafe_allow_html=True)
+                                    st.text_area("_", value=_obj, height=80, disabled=True, key=f"vp_view_obj_{_gi}_{_vp_view_id}", label_visibility="collapsed")
+                                st.markdown("<div class='module-title'>🧠 通用能力模块</div>", unsafe_allow_html=True)
+                                _comp = extract_text(_vf.get("通用能力总结"), "未填写").strip() or "未填写"
+                                _comp_sc = _vf.get("通用能力自评得分", 0.0)
+                                _comp_str = str(_comp_sc) if _comp_sc is not None else "-"
+                                st.markdown(f"**🧠 通用能力总结** <span style='font-size:14px; color:#888;'>(自评: {_comp_str}分)</span>", unsafe_allow_html=True)
+                                st.text_area("_", value=_comp, height=100, disabled=True, key=f"vp_view_comp_{_vp_view_id}", label_visibility="collapsed")
+                                _vrole = extract_text(_vf.get("角色", "")).strip()
+                                if _vrole == "管理者":
+                                    st.markdown("<div class='module-title'>👑 领导力模块</div>", unsafe_allow_html=True)
+                                    _lead = extract_text(_vf.get("领导力总结"), "未填写").strip() or "未填写"
+                                    _lead_sc = _vf.get("领导力自评得分", 0.0)
+                                    _lead_str = str(_lead_sc) if _lead_sc is not None else "-"
+                                    st.markdown(f"**👑 领导力总结** <span style='font-size:14px; color:#888;'>(自评: {_lead_str}分)</span>", unsafe_allow_html=True)
+                                    st.text_area("_", value=_lead, height=100, disabled=True, key=f"vp_view_lead_{_vp_view_id}", label_visibility="collapsed")
+                                st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
+
         if idx_reports is not None:
             with tabs[idx_reports]:
                 if _is_module_disabled("视图与报表"):
@@ -5253,6 +6090,7 @@ def main_app():
                             grade_counts = Counter()
                             dept_stats = {}
                             member_cards = []
+                            step_people = {"target_set": [], "self_done": [], "mgr_done": [], "dept_done": [], "vp_done": []}
                             for rec in report_records:
                                 f = rec.get("fields", {})
                                 name = extract_text(f.get("姓名"), "未知姓名").strip()
@@ -5275,10 +6113,12 @@ def main_app():
                                 if has_target:
                                     target_set_cnt += 1
 
-                                self_done = extract_text(f.get("自评是否提交", "")).strip() == "是"
-                                mgr_done = extract_text(f.get("上级评价是否完成", "")).strip() == "是"
-                                dept_done = extract_text(f.get("一级部门调整完毕", "")).strip() == "是"
-                                public_done = extract_text(f.get("分管高管调整完毕", "")).strip() == "是"
+                                # 仅此处兼容飞书 checkbox 返回 true/false
+                                _v = lambda k: extract_text(f.get(k), "").strip() == "是" or f.get(k) is True
+                                self_done = _v("自评是否提交")
+                                mgr_done = _v("上级评价是否完成")
+                                dept_done = _v("一级部门调整完毕")
+                                public_done = _v("分管高管调整完毕")
                                 if self_done:
                                     self_done_cnt += 1
                                 if mgr_done:
@@ -5337,6 +6177,17 @@ def main_app():
                                     status_txt = "目标设定中"
                                 else:
                                     status_txt = "待启动"
+                                person_info = {"name": name, "emp_id": emp, "dept": dept}
+                                if has_target:
+                                    step_people["target_set"].append(person_info)
+                                if self_done:
+                                    step_people["self_done"].append(person_info)
+                                if mgr_done:
+                                    step_people["mgr_done"].append(person_info)
+                                if dept_done:
+                                    step_people["dept_done"].append(person_info)
+                                if public_done:
+                                    step_people["vp_done"].append(person_info)
                                 member_cards.append({
                                     "name": name,
                                     "emp": emp,
@@ -5410,20 +6261,33 @@ def main_app():
 
                             st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
                             st.markdown("<div class='module-title'>🧾 部门绩效详情</div>", unsafe_allow_html=True)
+                            _exec_detail, _dept_detail = _build_detail_stats(report_records, extract_text_fn=extract_text, dept_key="二级部门")
                             dept_rows = []
-                            for dept_name, dval in sorted(dept_stats.items(), key=lambda x: x[0]):
-                                def _row(dept, scope, t, d, g):
-                                    rv = round(d / t * 100, 1) if t else 0
-                                    return {"部门": dept, "口径": scope, "总人数": t, "已完成": d, "完成率": "100%" if rv == 100 else f"{rv}%", "S级": g["S"], "A级": g["A"], "B+级": g["B+"], "B级": g["B"], "B-级": g["B-"], "C级": g["C"]}
-                                dept_rows.append(_row(dept_name, "总", dval["total"], dval["done"], dval["grades"]))
-                                has_sales = (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0
-                                if has_sales:
-                                    dept_rows.append(_row(dept_name, "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"])))
-                                    dept_rows.append(_row(dept_name, "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"])))
+                            _mgr_exec_vps = sorted({vp.strip() for r in report_records if _is_executive(r) for vp in extract_text(r.get("fields", {}).get("分管高管") or r.get("fields", {}).get("高管"), "").strip().replace("，", ",").split(",") if vp.strip()})
+                            _mgr_exec_label = f"高管（{_mgr_exec_vps[0]}）" if len(_mgr_exec_vps) == 1 else (f"高管（{'、'.join(_mgr_exec_vps)}）" if _mgr_exec_vps else "高管")
+
+                            def _mgr_row(dept, scope, t, d, g):
+                                rv = round(d / t * 100, 1) if t else 0
+                                return {"部门": dept, "口径": scope, "总人数": t, "已完成": d, "完成率": "100%" if rv == 100 else f"{rv}%", "S级": g["S"], "A级": g["A"], "B+级": g["B+"], "B级": g["B"], "B-级": g["B-"], "C级": g["C"]}
+                            if _exec_detail["total"] > 0:
+                                dept_rows.append(_mgr_row(_mgr_exec_label, "总", _exec_detail["total"], _exec_detail["done"], _exec_detail["grades"]))
+                                if (_exec_detail.get("sales_total") or 0) > 0 and (_exec_detail.get("non_sales_total") or 0) > 0:
+                                    dept_rows.append(_mgr_row(_mgr_exec_label, "销售", _exec_detail["sales_total"], _exec_detail["sales_done"], _exec_detail.get("sales_grades", _exec_detail["grades"])))
+                                    dept_rows.append(_mgr_row(_mgr_exec_label, "非销售", _exec_detail["non_sales_total"], _exec_detail["non_sales_done"], _exec_detail.get("non_sales_grades", _exec_detail["grades"])))
+                            for dept_name, dval in sorted(_dept_detail.items(), key=lambda x: x[0]):
+                                dept_rows.append(_mgr_row(dept_name, "总", dval["total"], dval["done"], dval["grades"]))
+                                if (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0:
+                                    dept_rows.append(_mgr_row(dept_name, "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"])))
+                                    dept_rows.append(_mgr_row(dept_name, "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"])))
                             dept_df = pd.DataFrame(dept_rows)
                             if not dept_df.empty:
                                 def _dept_row_style(row):
-                                    scope = row.get("口径", "")
+                                    scope, dept = row.get("口径", ""), str(row.get("部门", ""))
+                                    if dept.startswith("高管"):
+                                        if scope == "总":
+                                            return ["font-weight: 700; font-size: 14px; background-color: rgba(255,193,7,0.12); color: #FFC107;"] * len(row)
+                                        if scope in ("销售", "非销售"):
+                                            return ["font-size: 12px; background-color: rgba(255,193,7,0.06);"] * len(row)
                                     if scope == "总":
                                         return ["font-weight: 700; font-size: 14px; background-color: rgba(255,255,255,0.06);"] * len(row)
                                     if scope == "销售":
@@ -5458,8 +6322,7 @@ def main_app():
                             </div>
                             """
                             st.markdown(_vp_kpi_html, unsafe_allow_html=True)
-                            st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
-
+                            st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
                             # 图二计算逻辑：是否绩效关联奖金=否→销售，=是→非销售；人员基数=该口径人数，比例向下取整
                             report_sales = [r for r in report_records if extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "否"]
                             report_non_sales = [r for r in report_records if extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "是"]
@@ -5528,9 +6391,13 @@ def main_app():
                                     dg["actual_sum"] = dg["actual_sa"] + dg["actual_bp"] + dg["actual_b"] + dg["actual_bm"] + dg["actual_c"]
                                 return dgs
                             if is_vp and has_bonus_no:
-                                _dept_stats_by_scope["全部"] = _build_dept_grade_stats(report_records, use_total_as_base=True)
-                                _dept_stats_by_scope["销售"] = _build_dept_grade_stats(report_sales)
-                                _dept_stats_by_scope["非销售"] = _build_dept_grade_stats(report_non_sales)
+                                # 分管范围总数已排除 VP 本人；各部门排除一级部门负责人
+                                _vp_excl_dept_heads = [r for r in report_records if not _is_dept_head(r)]
+                                _vp_sales_excl = [r for r in report_sales if not _is_dept_head(r)]
+                                _vp_non_sales_excl = [r for r in report_non_sales if not _is_dept_head(r)]
+                                _dept_stats_by_scope["全部"] = _build_dept_grade_stats(_vp_excl_dept_heads, use_total_as_base=True)
+                                _dept_stats_by_scope["销售"] = _build_dept_grade_stats(_vp_sales_excl)
+                                _dept_stats_by_scope["非销售"] = _build_dept_grade_stats(_vp_non_sales_excl)
                                 dept_grade_stats = _dept_stats_by_scope.get(st.session_state.get("report_bonus_scope_filter", "全部"), _dept_stats_by_scope["全部"])
                             for rec in (report_scope if report_scope else report_records):
                                 f = rec.get("fields", {})
@@ -5545,11 +6412,10 @@ def main_app():
                                 if final_grade in GRADE_OPTIONS:
                                     grade_counts_bonus[final_grade] += 1
                             if is_vp and not has_bonus_no:
-                                # 无筛选框时：从 report_scope 构建；无销售数据时用全部口径
-                                dept_grade_stats = _build_dept_grade_stats(
-                                    report_scope if report_scope else report_records,
-                                    use_total_as_base=not report_sales,
-                                )
+                                # 无筛选框时：从 report_scope 构建，各部门排除一级部门负责人
+                                _src = report_scope if report_scope else report_records
+                                _src_excl = [r for r in _src if not _is_dept_head(r)]
+                                dept_grade_stats = _build_dept_grade_stats(_src_excl, use_total_as_base=not report_sales)
                             # 计算逻辑：S/A 20%向下取整；B+ 默认15%，每多一个B-/C可多一个B+，最高25%，向下取整；B 剔除S/A/B+/B-/C
                             bmc_actual = grade_counts_bonus.get("B-", 0) + grade_counts_bonus.get("C", 0)
                             sa_theory = math.floor(base_cnt * 0.20)
@@ -5610,7 +6476,6 @@ def main_app():
                                 + _td(actual_c, "#F44336")
                                 + _td(actual_sum, "#b7bdc8")
                             )
-                            st.info("💡 提示：此人数不含评价者本人，所有人数向下取整。")
                             table_html = f"""
                             <div style='overflow-x:auto;'>
                             <div style='font-size:16px;color:#66b2ff;margin-bottom:8px;font-weight:800;'>分管范围总数</div>
@@ -5880,6 +6745,8 @@ def main_app():
 
                             st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
                             st.markdown("<div class='module-title'>📈 绩效视图</div>", unsafe_allow_html=True)
+                            _vp_dept_key = "一级部门" if is_vp else "二级部门"
+                            _exec_vp, _dept_vp = _build_detail_stats(report_records, extract_text_fn=extract_text, dept_key=_vp_dept_key)
                             chart_l, chart_r = st.columns(2)
                             with chart_l:
                                 st.markdown("**绩效等级分布**")
@@ -5908,7 +6775,12 @@ def main_app():
                             with chart_r:
                                 st.markdown("**各部门考核完成率**")
                                 dept_rate_rows = []
-                                for dept_name, dval in sorted(dept_stats.items(), key=lambda x: x[0]):
+                                if _exec_vp["total"] > 0:
+                                    td, dd = _exec_vp["total"], _exec_vp["done"]
+                                    _chart_exec_names = sorted({extract_text(r.get("fields", {}).get("姓名"), "").strip() or "未知" for r in report_records if _is_executive(r)})
+                                    _chart_exec_label = f"高管（{_chart_exec_names[0]}）" if len(_chart_exec_names) == 1 else (f"高管（{'、'.join(_chart_exec_names)}）" if _chart_exec_names else "高管")
+                                    dept_rate_rows.append({"部门": _chart_exec_label, "完成率": round(dd / td * 100, 1) if td else 0.0, "完成": dd, "总数": td})
+                                for dept_name, dval in sorted(_dept_vp.items(), key=lambda x: x[0]):
                                     total_d = dval["total"]
                                     done = dval["done"]
                                     dept_rate_rows.append(
@@ -5939,19 +6811,31 @@ def main_app():
                             st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
                             st.markdown("<div class='module-title'>🧾 部门绩效详情</div>", unsafe_allow_html=True)
                             dept_rows = []
-                            for dept_name, dval in sorted(dept_stats.items(), key=lambda x: x[0]):
-                                def _row(dept, scope, t, d, g):
-                                    rv = round(d / t * 100, 1) if t else 0
-                                    return {"部门": dept, "口径": scope, "总人数": t, "已完成": d, "完成率": "100%" if rv == 100 else f"{rv}%", "S级": g["S"], "A级": g["A"], "B+级": g["B+"], "B级": g["B"], "B-级": g["B-"], "C级": g["C"]}
-                                dept_rows.append(_row(dept_name, "总", dval["total"], dval["done"], dval["grades"]))
-                                has_sales = (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0
-                                if has_sales:
-                                    dept_rows.append(_row(dept_name, "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"])))
-                                    dept_rows.append(_row(dept_name, "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"])))
+
+                            def _vp_row(dept, scope, t, d, g):
+                                rv = round(d / t * 100, 1) if t else 0
+                                return {"部门": dept, "口径": scope, "总人数": t, "已完成": d, "完成率": "100%" if rv == 100 else f"{rv}%", "S级": g["S"], "A级": g["A"], "B+级": g["B+"], "B级": g["B"], "B-级": g["B-"], "C级": g["C"]}
+                            if _exec_vp["total"] > 0:
+                                _vp_exec_names = sorted({extract_text(r.get("fields", {}).get("姓名"), "").strip() or "未知" for r in report_records if _is_executive(r)})
+                                _vp_exec_label = f"高管（{_vp_exec_names[0]}）" if len(_vp_exec_names) == 1 else (f"高管（{'、'.join(_vp_exec_names)}）" if _vp_exec_names else "高管")
+                                dept_rows.append(_vp_row(_vp_exec_label, "总", _exec_vp["total"], _exec_vp["done"], _exec_vp["grades"]))
+                                if (_exec_vp.get("sales_total") or 0) > 0 and (_exec_vp.get("non_sales_total") or 0) > 0:
+                                    dept_rows.append(_vp_row(_vp_exec_label, "销售", _exec_vp["sales_total"], _exec_vp["sales_done"], _exec_vp.get("sales_grades", _exec_vp["grades"])))
+                                    dept_rows.append(_vp_row(_vp_exec_label, "非销售", _exec_vp["non_sales_total"], _exec_vp["non_sales_done"], _exec_vp.get("non_sales_grades", _exec_vp["grades"])))
+                            for dept_name, dval in sorted(_dept_vp.items(), key=lambda x: x[0]):
+                                dept_rows.append(_vp_row(dept_name, "总", dval["total"], dval["done"], dval["grades"]))
+                                if (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0:
+                                    dept_rows.append(_vp_row(dept_name, "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"])))
+                                    dept_rows.append(_vp_row(dept_name, "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"])))
                             dept_df = pd.DataFrame(dept_rows)
                             if not dept_df.empty:
-                                def _dept_row_style(row):
-                                    scope = row.get("口径", "")
+                                def _vp_dept_row_style(row):
+                                    scope, dept = row.get("口径", ""), str(row.get("部门", ""))
+                                    if dept.startswith("高管"):
+                                        if scope == "总":
+                                            return ["font-weight: 700; font-size: 14px; background-color: rgba(255,193,7,0.12); color: #FFC107;"] * len(row)
+                                        if scope in ("销售", "非销售"):
+                                            return ["font-size: 12px; background-color: rgba(255,193,7,0.06);"] * len(row)
                                     if scope == "总":
                                         return ["font-weight: 700; font-size: 14px; background-color: rgba(255,255,255,0.06);"] * len(row)
                                     if scope == "销售":
@@ -5959,10 +6843,12 @@ def main_app():
                                     if scope == "非销售":
                                         return ["font-size: 12px; color: #64B5F6; background-color: rgba(100,181,246,0.08);"] * len(row)
                                     return [""] * len(row)
-                                dept_df_display = dept_df.style.set_properties(**{"text-align": "center"}).apply(_dept_row_style, axis=1)
+                                dept_df_display = dept_df.style.set_properties(**{"text-align": "center"}).apply(_vp_dept_row_style, axis=1)
                             else:
                                 dept_df_display = dept_df
                             st.dataframe(dept_df_display, use_container_width=True, hide_index=True)
+                            if is_vp:
+                                st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 提示：各部门含一级部门负责人，高管单列；如果一级部门负责人和高管为同一人，则一级部门中不含，高管单列。</div>", unsafe_allow_html=True)
 
     # ==========================================
     # 🟢 模块 3：历史信息 (员工个人不显示)
@@ -6124,6 +7010,12 @@ def main_app():
                 st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
                 st.markdown("<div class='module-title'>✍️ 上一次绩效考核评语</div>", unsafe_allow_html=True)
                 st.info(last_comment)
+
+    # 回到顶端悬浮按钮：纯 HTML 锚点，浏览器原生滚动，无需 JS
+    if st.session_state.role == "管理者":
+        _ct = st.session_state.get("main_tabs")
+        if _ct in ("👥 上级评分", "📌 一级部门负责人调整", "📌 分管高管调整"):
+            st.markdown('<a href="#page-top" class="back-to-top-btn" title="回到顶端">⬆️ 回到顶端</a>', unsafe_allow_html=True)
 
 if st.session_state.user_info is None:
     login_page()
