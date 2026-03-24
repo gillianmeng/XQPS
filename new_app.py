@@ -96,6 +96,7 @@ def _resolve_admin_config_path():
 
 ADMIN_CONFIG_PATH = _resolve_admin_config_path()
 # 配置修改策略：无论部署环境如何，管理员均应通过「📋 后台配置」模块修改配置，勿直接编辑 admin_config.json。
+FROZEN_ANNOUNCEMENTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frozen_announcements.json")
 ANNOUNCE_LOCATIONS = ["员工自评", "上级评分", "一级部门负责人调整", "分管高管调整"]
 DOC_LINK_NAMES = ["雪球集团绩效管理制度", "雪球集团绩效管理实施细则", "绩效考核系统操作指引"]
 DEFAULT_DOC_LINK = "https://xueqiu.feishu.cn/wiki/RL1OwdkJ9iQnRakIcj6cXKRSnfg"  # 雪球集团绩效管理制度 默认
@@ -228,8 +229,62 @@ def _set_cycle_config_complete(cycle, complete=True):
     cfg["cycle_configs"][c]["config_complete"] = bool(complete)
     return _write_admin_config(cfg)
 
+def _load_frozen_announcements_file():
+    """加载仓库内置公告快照（frozen_announcements.json），供无 admin_config 或强制回退时使用。"""
+    try:
+        if os.path.exists(FROZEN_ANNOUNCEMENTS_PATH):
+            with open(FROZEN_ANNOUNCEMENTS_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"[XQPS] frozen_announcements 读取失败: {e}", flush=True)
+    return {}
+
+
+def _frozen_announcement_for(location, cycle):
+    """按周期从内置快照取公告；支持等价周期键与 _default。"""
+    data = _load_frozen_announcements_file()
+    if not data or not isinstance(data, dict):
+        return None
+    keys_try = []
+    if cycle:
+        c = (cycle or "").strip()
+        keys_try.append(c)
+        keys_try.append(_normalize_cycle_display(c) or c)
+        for old, preferred in CYCLE_EQUIVALENTS:
+            if c == old:
+                keys_try.append(preferred)
+            elif c == preferred:
+                keys_try.append(old)
+    keys_try.append("_default")
+    seen = set()
+    for k in keys_try:
+        if not k or k in seen:
+            continue
+        if k.startswith("_") and k != "_default":
+            continue
+        seen.add(k)
+        sec = data.get(k)
+        if not isinstance(sec, dict):
+            continue
+        s = (sec.get(location) or "").strip()
+        if s:
+            return s
+    return None
+
+
+def _use_frozen_announcement_fallback():
+    """无配置文件，或显式要求使用内置快照（后台暂不可写时可在环境变量中开启）。"""
+    e = os.environ.get("XQPS_USE_FROZEN_ANNOUNCEMENTS", "").strip().lower()
+    if e in ("1", "true", "yes", "on"):
+        return True
+    if e in ("0", "false", "no", "off"):
+        return False
+    return not os.path.exists(ADMIN_CONFIG_PATH)
+
+
 def _read_admin_announcement(location, cycle=None):
-    """读取指定位置的公告覆盖。cycle=None 时使用 display_cycle"""
+    """读取指定位置的公告覆盖。cycle=None 时使用 display_cycle。
+    若 admin_config 中该位置为空且满足回退条件，则使用 frozen_announcements.json 中的内置快照。"""
     c = cycle or _read_display_cycle()
     if c:
         cc = _read_cycle_config(c)
@@ -237,7 +292,14 @@ def _read_admin_announcement(location, cycle=None):
     else:
         ann = _read_admin_config().get("announcements") or {}
         v = ann.get(location) or ""
-    return (v or "").strip() or None
+    v = (v or "").strip()
+    if v:
+        return v
+    if _use_frozen_announcement_fallback():
+        fz = _frozen_announcement_for(location, c)
+        if fz:
+            return fz
+    return None
 
 def _write_admin_announcement(location, content, cycle=None):
     """写入公告。cycle=None 时写入 display_cycle 的配置"""
@@ -677,6 +739,7 @@ def _render_admin_dashboard():
             </style>
             """, unsafe_allow_html=True)
             st.info("💡 无论部署环境如何，请通过本模块修改配置，请勿直接编辑配置文件。")
+            st.caption("无 admin_config 或不可写时，各页公告使用仓库内 frozen_announcements.json；可设环境变量 XQPS_USE_FROZEN_ANNOUNCEMENTS=1 强制内置快照。")
             st.caption("绩效结果和评语查看权限")
             _rv_nd = _read_result_visible()
             _rn1, _rn2 = st.columns(2)
@@ -805,6 +868,7 @@ def _render_admin_dashboard():
         st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
         with st.sidebar.expander("📋 后台配置", expanded=False):
             st.info("💡 无论部署环境如何，请通过本模块修改配置，请勿直接编辑配置文件。")
+            st.caption("无 admin_config 或不可写时，各页公告使用仓库内 frozen_announcements.json；可设环境变量 XQPS_USE_FROZEN_ANNOUNCEMENTS=1 强制内置快照。")
             st.markdown("""
             <style>
             div[data-testid="stSidebar"] [data-testid="stExpander"]:first-of-type button,
@@ -1276,6 +1340,7 @@ def _render_admin_dashboard():
     st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
     with st.sidebar.expander("📋 后台配置", expanded=False):
         st.info("💡 无论部署环境如何，请通过本模块修改配置，请勿直接编辑配置文件。")
+        st.caption("无 admin_config 或不可写时，各页公告使用仓库内 frozen_announcements.json；可设环境变量 XQPS_USE_FROZEN_ANNOUNCEMENTS=1 强制内置快照。")
         st.markdown("""
         <style>
         div[data-testid="stSidebar"] [data-testid="stExpander"]:first-of-type button,
