@@ -93,6 +93,7 @@ def _resolve_admin_config_path():
     return os.path.join(fallback, "admin_config.json")
 
 ADMIN_CONFIG_PATH = _resolve_admin_config_path()
+# 配置修改策略：无论部署环境如何，管理员均应通过「📋 后台配置」模块修改配置，勿直接编辑 admin_config.json。
 ANNOUNCE_LOCATIONS = ["员工自评", "上级评分", "一级部门负责人调整", "分管高管调整"]
 DOC_LINK_NAMES = ["雪球集团绩效管理制度", "雪球集团绩效管理实施细则", "绩效考核系统操作指引"]
 DEFAULT_DOC_LINK = "https://xueqiu.feishu.cn/wiki/RL1OwdkJ9iQnRakIcj6cXKRSnfg"  # 雪球集团绩效管理制度 默认
@@ -121,7 +122,7 @@ def _normalize_cycle_display(cycle):
     return cycle
 
 def _read_admin_config():
-    """读取管理员配置"""
+    """读取管理员配置。所有配置修改应通过管理员后台「📋 后台配置」模块进行，勿直接编辑文件。"""
     try:
         if os.path.exists(ADMIN_CONFIG_PATH):
             with open(ADMIN_CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -152,15 +153,20 @@ def _write_admin_cycle_override(cycle):
     return _write_display_cycle(cycle)
 
 def _read_display_cycle():
-    """前台展示的考核周期，以管理员选择为准"""
+    """前台展示的考核周期，以管理员选择为准。返回统一展示格式（2026上半年→2026年上半年）"""
     cfg = _read_admin_config()
     v = (cfg.get("display_cycle") or cfg.get("cycle") or "").strip()
-    return v or None
+    if v:
+        return _normalize_cycle_display(v) or v
+    return None
 
 def _write_display_cycle(cycle):
-    """设置前台展示的考核周期，切换后前台自动更新"""
+    """设置前台展示的考核周期，切换后前台自动更新。写入时统一为展示格式（2026上半年→2026年上半年）"""
     cfg = _read_admin_config()
-    cfg["display_cycle"] = (cycle or "").strip()
+    v = (cycle or "").strip()
+    if v:
+        v = _normalize_cycle_display(v) or v
+    cfg["display_cycle"] = v
     cfg["cycle"] = cfg["display_cycle"]  # 兼容
     return _write_admin_config(cfg)
 
@@ -542,10 +548,11 @@ def _normalize_dept_text(val):
     return "-".join(parts).strip("-").strip()
 
 def _pick_cycle_from_fields(ff):
+    """从飞书字段提取考核周期。返回统一展示格式（2026上半年→2026年上半年）"""
     for k in ["绩效考核周期", "考核周期", "本次绩效考核周期", "本次考核周期"]:
         v = _extract_text(ff.get(k), "").strip()
         if v:
-            return v
+            return _normalize_cycle_display(v) or v
     return "2026年上半年"
 
 def _get_available_cycles(all_records):
@@ -596,10 +603,11 @@ def _migrate_cycle_to_preferred(old_cycle, preferred_cycle):
     return _write_admin_config(cfg)
 
 def _add_cycle_to_config(cycle):
-    """添加新周期到配置（用于配置尚未有数据的下一考核周期）"""
+    """添加新周期到配置（用于配置尚未有数据的下一考核周期）。写入时统一为展示格式"""
     c = (cycle or "").strip()
     if not c:
         return False
+    c = _normalize_cycle_display(c) or c
     cfg = _read_admin_config()
     cfg.setdefault("cycle_configs", {})
     if c not in cfg["cycle_configs"]:
@@ -650,6 +658,7 @@ def _render_admin_dashboard():
             }
             </style>
             """, unsafe_allow_html=True)
+            st.info("💡 无论部署环境如何，请通过本模块修改配置，请勿直接编辑配置文件。")
             st.caption("绩效结果和评语查看权限")
             _rv_nd = _read_result_visible()
             _rn1, _rn2 = st.columns(2)
@@ -777,6 +786,7 @@ def _render_admin_dashboard():
         st.sidebar.selectbox("展示周期", options=_cycles_empty, index=_cycles_empty.index(_cur_norm) if _cur_norm in _cycles_empty else 0, key="admin_display_cycle_empty", label_visibility="collapsed", on_change=_on_display_cycle_change_empty)
         st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
         with st.sidebar.expander("📋 后台配置", expanded=False):
+            st.info("💡 无论部署环境如何，请通过本模块修改配置，请勿直接编辑配置文件。")
             st.markdown("""
             <style>
             div[data-testid="stSidebar"] [data-testid="stExpander"]:first-of-type button,
@@ -983,8 +993,9 @@ def _render_admin_dashboard():
         vp_adj = _extract_text(f.get("分管高管调整考核结果"), "").strip()
         dept_adj = _extract_text(f.get("一级部门调整考核结果"), "").strip()
         mgr_grade = _extract_text(f.get("考核结果"), "").strip()
+        final_from_field = _extract_text(f.get("最终绩效结果") or f.get("最终考核结果"), "").strip()
         final_grade = "-"
-        for cand in [vp_adj, dept_adj, mgr_grade]:
+        for cand in [vp_adj, dept_adj, mgr_grade, final_from_field]:
             if cand in GRADE_OPTIONS:
                 final_grade = cand
                 break
@@ -1057,8 +1068,9 @@ def _render_admin_dashboard():
         vp_adj = _extract_text(f.get("分管高管调整考核结果"), "").strip()
         dept_adj = _extract_text(f.get("一级部门调整考核结果"), "").strip()
         mgr_grade = _extract_text(f.get("考核结果"), "").strip()
+        final_grade = _extract_text(f.get("最终绩效结果") or f.get("最终考核结果"), "").strip()
         fg = "-"
-        for cand in [vp_adj, dept_adj, mgr_grade]:
+        for cand in [vp_adj, dept_adj, mgr_grade, final_grade]:
             if cand in GRADE_OPTIONS:
                 fg = cand
                 break
@@ -1073,8 +1085,9 @@ def _render_admin_dashboard():
             vp_adj = _extract_text(rf.get("分管高管调整考核结果"), "").strip()
             dept_adj = _extract_text(rf.get("一级部门调整考核结果"), "").strip()
             mgr_grade = _extract_text(rf.get("考核结果"), "").strip()
+            final_grade = _extract_text(rf.get("最终绩效结果") or rf.get("最终考核结果"), "").strip()
             fg = "-"
-            for cand in [vp_adj, dept_adj, mgr_grade]:
+            for cand in [vp_adj, dept_adj, mgr_grade, final_grade]:
                 if cand in GRADE_OPTIONS:
                     fg = cand
                     break
@@ -1244,6 +1257,7 @@ def _render_admin_dashboard():
     _sel_display = st.sidebar.selectbox("展示周期", options=_available_cycles, index=_available_cycles.index(_cur_norm) if _cur_norm in _available_cycles else 0, key="admin_display_cycle", label_visibility="collapsed", on_change=_on_display_cycle_change)
     st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
     with st.sidebar.expander("📋 后台配置", expanded=False):
+        st.info("💡 无论部署环境如何，请通过本模块修改配置，请勿直接编辑配置文件。")
         st.markdown("""
         <style>
         div[data-testid="stSidebar"] [data-testid="stExpander"]:first-of-type button,
@@ -1492,8 +1506,9 @@ def _render_admin_dashboard():
             vp_adj = _extract_text(f.get("分管高管调整考核结果"), "").strip()
             dept_adj = _extract_text(f.get("一级部门调整考核结果"), "").strip()
             mgr_grade = _extract_text(f.get("考核结果"), "").strip()
+            final_from_field = _extract_text(f.get("最终绩效结果") or f.get("最终考核结果"), "").strip()
             final_grade = "-"
-            for cand in [vp_adj, dept_adj, mgr_grade]:
+            for cand in [vp_adj, dept_adj, mgr_grade, final_from_field]:
                 if cand in GRADE_OPTIONS:
                     final_grade = cand
                     break
@@ -1525,8 +1540,9 @@ def _render_admin_dashboard():
         vp_adj = _extract_text(f.get("分管高管调整考核结果"), "").strip()
         dept_adj = _extract_text(f.get("一级部门调整考核结果"), "").strip()
         mgr_grade = _extract_text(f.get("考核结果"), "").strip()
+        final_from_field = _extract_text(f.get("最终绩效结果") or f.get("最终考核结果"), "").strip()
         final_grade = "-"
-        for cand in [vp_adj, dept_adj, mgr_grade]:
+        for cand in [vp_adj, dept_adj, mgr_grade, final_from_field]:
             if cand in GRADE_OPTIONS:
                 final_grade = cand
                 break
@@ -1621,12 +1637,28 @@ def _render_admin_dashboard():
             return f"<td style='text-align:center;color:{c};{_q_cell}' colspan='{col}'>{v}</td>"
         _q_header = _q_th("级别") + _q_th("S/A级别") + _q_th("B+级别") + _q_th("B+及以上级别") + _q_th("B级别") + _q_th("B-级别") + _q_th("C级别") + _q_th("SUM (人)")
         _q_bp_hint = "默认15%，根据实际的B-/C占比调整向上浮动"
-        # 全公司总体配额表：始终展示，包含分管高管
+        # 全公司总体配额表：S/A=20%、B+=15% 按总人数统一计算，不用各部门 floor 后求和
         if dept_grade_stats_allcompany:
-            _all_tot = {"sa_theory": 0, "bp_theory": 0, "sapb_theory": 0, "base_cnt": 0, "actual_sa": 0, "actual_bp": 0, "actual_sapb": 0, "actual_b": 0, "actual_bm": 0, "actual_c": 0, "actual_sum": 0}
-            for dg in dept_grade_stats_allcompany.values():
-                for k in _all_tot:
-                    _all_tot[k] += dg.get(k, 0)
+            _all_base = sum(dg.get("base_cnt", 0) for dg in dept_grade_stats_allcompany.values())
+            _all_actual_sa = sum(dg.get("actual_sa", 0) for dg in dept_grade_stats_allcompany.values())
+            _all_actual_bp = sum(dg.get("actual_bp", 0) for dg in dept_grade_stats_allcompany.values())
+            _all_bmc = sum(dg.get("actual_bm", 0) + dg.get("actual_c", 0) for dg in dept_grade_stats_allcompany.values())
+            _all_sa_theory = math.floor(_all_base * 0.20) if _all_base else 0
+            _all_bp_base = math.floor(_all_base * 0.15) if _all_base else 0
+            _all_bp_cap = math.floor(_all_base * 0.25) if _all_base else 0
+            _all_bp_theory = min(_all_bp_cap, _all_bp_base + _all_bmc)
+            _all_sapb_theory = _all_sa_theory + _all_bp_theory
+            _all_actual_sapb = _all_actual_sa + _all_actual_bp
+            _all_actual_b = sum(dg.get("actual_b", 0) for dg in dept_grade_stats_allcompany.values())
+            _all_actual_bm = sum(dg.get("actual_bm", 0) for dg in dept_grade_stats_allcompany.values())
+            _all_actual_c = sum(dg.get("actual_c", 0) for dg in dept_grade_stats_allcompany.values())
+            _all_actual_sum = sum(dg.get("actual_sum", 0) for dg in dept_grade_stats_allcompany.values())
+            _all_tot = {
+                "sa_theory": _all_sa_theory, "bp_theory": _all_bp_theory, "sapb_theory": _all_sapb_theory,
+                "base_cnt": _all_base,
+                "actual_sa": _all_actual_sa, "actual_bp": _all_actual_bp, "actual_sapb": _all_actual_sapb,
+                "actual_b": _all_actual_b, "actual_bm": _all_actual_bm, "actual_c": _all_actual_c, "actual_sum": _all_actual_sum,
+            }
             _all_over_sa = _all_tot["actual_sa"] > _all_tot["sa_theory"]
             _all_over_bp = _all_tot["actual_bp"] > _all_tot["bp_theory"]
             _all_over_sapb = _all_tot["actual_sapb"] > _all_tot["sapb_theory"]
@@ -1665,12 +1697,28 @@ def _render_admin_dashboard():
             </div>
             """
             st.markdown(_all_quota_html, unsafe_allow_html=True)
-        # 分管高管配额总数：筛选分管高管时展示，不受一级部门筛选影响，正常显示
+        # 分管高管配额总数：S/A=20%、B+=15% 按总人数统一计算，不用各部门 floor 后求和
         if _sel_vp and _sel_vp != "全部" and dept_grade_stats_vp:
-            _vp_tot = {"sa_theory": 0, "bp_theory": 0, "sapb_theory": 0, "base_cnt": 0, "actual_sa": 0, "actual_bp": 0, "actual_sapb": 0, "actual_b": 0, "actual_bm": 0, "actual_c": 0, "actual_sum": 0}
-            for dg in dept_grade_stats_vp.values():
-                for k in _vp_tot:
-                    _vp_tot[k] += dg.get(k, 0)
+            _vp_base = sum(dg.get("base_cnt", 0) for dg in dept_grade_stats_vp.values())
+            _vp_actual_sa = sum(dg.get("actual_sa", 0) for dg in dept_grade_stats_vp.values())
+            _vp_actual_bp = sum(dg.get("actual_bp", 0) for dg in dept_grade_stats_vp.values())
+            _vp_bmc = sum(dg.get("actual_bm", 0) + dg.get("actual_c", 0) for dg in dept_grade_stats_vp.values())
+            _vp_sa_theory = math.floor(_vp_base * 0.20) if _vp_base else 0
+            _vp_bp_base = math.floor(_vp_base * 0.15) if _vp_base else 0
+            _vp_bp_cap = math.floor(_vp_base * 0.25) if _vp_base else 0
+            _vp_bp_theory = min(_vp_bp_cap, _vp_bp_base + _vp_bmc)
+            _vp_sapb_theory = _vp_sa_theory + _vp_bp_theory
+            _vp_actual_sapb = _vp_actual_sa + _vp_actual_bp
+            _vp_actual_b = sum(dg.get("actual_b", 0) for dg in dept_grade_stats_vp.values())
+            _vp_actual_bm = sum(dg.get("actual_bm", 0) for dg in dept_grade_stats_vp.values())
+            _vp_actual_c = sum(dg.get("actual_c", 0) for dg in dept_grade_stats_vp.values())
+            _vp_actual_sum = sum(dg.get("actual_sum", 0) for dg in dept_grade_stats_vp.values())
+            _vp_tot = {
+                "sa_theory": _vp_sa_theory, "bp_theory": _vp_bp_theory, "sapb_theory": _vp_sapb_theory,
+                "base_cnt": _vp_base,
+                "actual_sa": _vp_actual_sa, "actual_bp": _vp_actual_bp, "actual_sapb": _vp_actual_sapb,
+                "actual_b": _vp_actual_b, "actual_bm": _vp_actual_bm, "actual_c": _vp_actual_c, "actual_sum": _vp_actual_sum,
+            }
             _vp_over_sa = _vp_tot["actual_sa"] > _vp_tot["sa_theory"]
             _vp_over_bp = _vp_tot["actual_bp"] > _vp_tot["bp_theory"]
             _vp_over_sapb = _vp_tot["actual_sapb"] > _vp_tot["sapb_theory"]
@@ -1710,7 +1758,7 @@ def _render_admin_dashboard():
             """
             st.markdown(_vp_quota_html, unsafe_allow_html=True)
             if not (_sel_vp and _sel_vp != "全部" and _sel_dept and _sel_dept != "全部部门"):
-                st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 配额统计口径：负责范围总体配额中，不含分管高管（因其不能调整自己）。</div>", unsafe_allow_html=True)
+                st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 配额统计口径：负责范围总体配额中，不含分管高管（因为自己不能调整自己）。另，负责范围总体配额由于增加了一级部门负责人，总体额度会大于所有部门配额之和。</div>", unsafe_allow_html=True)
         if _sel_vp and _sel_vp != "全部":
             st.markdown("<div style='font-size:16px;font-weight:700;color:#66b2ff;margin-bottom:8px;'>各分管部门总数</div>", unsafe_allow_html=True)
         _q_rows = []
@@ -1961,7 +2009,7 @@ def _check_admin_perm(record, user_name):
     """
     检查后台权限：返回 ("admin", None) | ("hrbp_lead", scope_depts) | ("hrbp", scope_depts) | (None, None)
     - 后台角色=系统管理员 → admin
-    - 后台角色=HRBP Lead → hrbp_lead，scope=姓名出现在 HRBP Lead 列的记录的部门
+    - 后台角色=HRBP Lead → hrbp_lead，scope=自己 HRBP Lead 列部门 + 下属 HRBP 负责部门
     - 后台角色=HRBP → hrbp，scope=姓名出现在 HRBP 列的记录的部门
     """
     if not record or not isinstance(record, dict):
@@ -1972,32 +2020,70 @@ def _check_admin_perm(record, user_name):
         return "admin", None
     if back_role not in ("HRBP", "HRBP Lead"):
         return None, None
-    col_name = "HRBP Lead" if back_role == "HRBP Lead" else "HRBP"
     perm = "hrbp_lead" if back_role == "HRBP Lead" else "hrbp"
-    all_records = fetch_all_records_safely(APP_TOKEN, TABLE_ID)
-    scope_depts = set()
-    for rec in all_records:
-        rf = rec.get("fields", {})
-        col_val = _extract_text(rf.get(col_name), "").strip()
-        if user_name and user_name in col_val:
-            d1 = _extract_text(rf.get("一级部门"), "").strip()
-            if d1 and d1 not in ("", "未获取", "-"):
-                scope_depts.add(d1)
-    return perm, list(scope_depts) if scope_depts else None
+    if back_role == "HRBP Lead":
+        scope_depts = _compute_hrbp_lead_scope_with_subordinates(user_name)
+    else:
+        all_records = fetch_all_records_safely(APP_TOKEN, TABLE_ID)
+        scope_depts = set()
+        for rec in all_records:
+            rf = rec.get("fields", {})
+            col_val = _extract_text(rf.get("HRBP"), "").strip()
+            if user_name and user_name in col_val:
+                d1 = _extract_text(rf.get("一级部门"), "").strip()
+                if d1 and d1 not in ("", "未获取", "-"):
+                    scope_depts.add(d1)
+        scope_depts = list(scope_depts) if scope_depts else None
+    return perm, scope_depts if scope_depts else None
 
-def _compute_hrbp_scope_from_name(user_name, role=None):
-    """根据姓名计算负责部门。role=hrbp_lead 时仅查 HRBP Lead 列，role=hrbp 时仅查 HRBP 列，否则查两列并集"""
+def _compute_hrbp_lead_scope_with_subordinates(user_name):
+    """
+    HRBP Lead 负责范围 = 自己姓名出现在 HRBP Lead 列的所有部门 + 下属 HRBP 姓名出现在 HRBP 列的所有部门。
+    下属定义：同一条记录中 HRBP Lead 列包含当前用户、HRBP 列有某人，则该某人为下属。
+    """
     if not user_name:
         return []
     all_records = fetch_all_records_safely(APP_TOKEN, TABLE_ID)
     scope_depts = set()
-    cols = []
+    subordinate_names = set()
+    for rec in all_records:
+        rf = rec.get("fields", {})
+        lead_val = _extract_text(rf.get("HRBP Lead"), "").strip()
+        if user_name not in lead_val:
+            continue
+        d1 = _extract_text(rf.get("一级部门"), "").strip()
+        if d1 and d1 not in ("", "未获取", "-"):
+            scope_depts.add(d1)
+        hrbp_val = _extract_text(rf.get("HRBP"), "").strip()
+        if hrbp_val:
+            for h in hrbp_val.replace("，", ",").split(","):
+                h = h.strip()
+                if h:
+                    subordinate_names.add(h)
+    for rec in all_records:
+        rf = rec.get("fields", {})
+        hrbp_val = _extract_text(rf.get("HRBP"), "").strip()
+        if not hrbp_val:
+            continue
+        for h in hrbp_val.replace("，", ",").split(","):
+            h = h.strip()
+            if h and h in subordinate_names:
+                d1 = _extract_text(rf.get("一级部门"), "").strip()
+                if d1 and d1 not in ("", "未获取", "-"):
+                    scope_depts.add(d1)
+                break
+    return list(scope_depts)
+
+
+def _compute_hrbp_scope_from_name(user_name, role=None):
+    """根据姓名计算负责部门。role=hrbp_lead 时包含下属 HRBP 的范围，role=hrbp 时仅查 HRBP 列，否则查两列并集"""
+    if not user_name:
+        return []
     if role == "hrbp_lead":
-        cols = ["HRBP Lead"]
-    elif role == "hrbp":
-        cols = ["HRBP"]
-    else:
-        cols = ["HRBP", "HRBP Lead"]
+        return _compute_hrbp_lead_scope_with_subordinates(user_name)
+    all_records = fetch_all_records_safely(APP_TOKEN, TABLE_ID)
+    scope_depts = set()
+    cols = ["HRBP"] if role == "hrbp" else ["HRBP", "HRBP Lead"]
     for rec in all_records:
         rf = rec.get("fields", {})
         for col_name in cols:
@@ -2051,7 +2137,7 @@ def _render_hrbp_dashboard():
         for k in ["绩效考核周期", "考核周期", "本次绩效考核周期", "本次考核周期"]:
             v = _extract_text(ff.get(k), "").strip()
             if v:
-                return v
+                return _normalize_cycle_display(v) or v
         return "2026年上半年"
 
     _default_cycle = pick_cycle(all_records[0].get("fields", {}))
@@ -2118,7 +2204,7 @@ def _render_hrbp_dashboard():
                 st.sidebar.caption(", ".join(_sub_bp_names))
         if scope_depts:
             st.sidebar.markdown("### 📋 负责部门")
-            st.sidebar.caption(", ".join(sorted(scope_depts)))
+            st.sidebar.markdown("\n".join(f"- {d}" for d in sorted(scope_depts)))
         st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
         if st.sidebar.button("🚪 退出登录", use_container_width=True):
             st.session_state.clear()
@@ -2163,8 +2249,9 @@ def _render_hrbp_dashboard():
         vp_adj = _extract_text(f.get("分管高管调整考核结果"), "").strip()
         dept_adj = _extract_text(f.get("一级部门调整考核结果"), "").strip()
         mgr_grade = _extract_text(f.get("考核结果"), "").strip()
+        final_from_field = _extract_text(f.get("最终绩效结果") or f.get("最终考核结果"), "").strip()
         final_grade = "-"
-        for cand in [vp_adj, dept_adj, mgr_grade]:
+        for cand in [vp_adj, dept_adj, mgr_grade, final_from_field]:
             if cand in GRADE_OPTIONS:
                 final_grade = cand
                 break
@@ -2255,8 +2342,9 @@ def _render_hrbp_dashboard():
         vp_adj = _extract_text(f.get("分管高管调整考核结果"), "").strip()
         dept_adj = _extract_text(f.get("一级部门调整考核结果"), "").strip()
         mgr_grade = _extract_text(f.get("考核结果"), "").strip()
+        final_grade = _extract_text(f.get("最终绩效结果") or f.get("最终考核结果"), "").strip()
         fg = "-"
-        for cand in [vp_adj, dept_adj, mgr_grade]:
+        for cand in [vp_adj, dept_adj, mgr_grade, final_grade]:
             if cand in GRADE_OPTIONS:
                 fg = cand
                 break
@@ -2306,7 +2394,7 @@ def _render_hrbp_dashboard():
             st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
     if scope_depts:
         st.sidebar.markdown("### 📋 负责部门")
-        st.sidebar.caption(", ".join(sorted(scope_depts)))
+        st.sidebar.markdown("\n".join(f"- {d}" for d in sorted(scope_depts)))
     st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
     st.sidebar.markdown("### 📚 制度学习")
     _doc_items = []
@@ -2456,8 +2544,9 @@ def _render_hrbp_dashboard():
             vp_adj = _extract_text(f.get("分管高管调整考核结果"), "").strip()
             dept_adj = _extract_text(f.get("一级部门调整考核结果"), "").strip()
             mgr_grade = _extract_text(f.get("考核结果"), "").strip()
+            final_from_field = _extract_text(f.get("最终绩效结果") or f.get("最终考核结果"), "").strip()
             final_grade = "-"
-            for cand in [vp_adj, dept_adj, mgr_grade]:
+            for cand in [vp_adj, dept_adj, mgr_grade, final_from_field]:
                 if cand in GRADE_OPTIONS:
                     final_grade = cand
                     break
@@ -2567,8 +2656,9 @@ def _render_hrbp_dashboard():
             vp_adj = _extract_text(rf.get("分管高管调整考核结果"), "").strip()
             dept_adj = _extract_text(rf.get("一级部门调整考核结果"), "").strip()
             mgr_grade = _extract_text(rf.get("考核结果"), "").strip()
+            final_grade = _extract_text(rf.get("最终绩效结果") or rf.get("最终考核结果"), "").strip()
             fg = "-"
-            for cand in [vp_adj, dept_adj, mgr_grade]:
+            for cand in [vp_adj, dept_adj, mgr_grade, final_grade]:
                 if cand in GRADE_OPTIONS:
                     fg = cand
                     break
@@ -2618,6 +2708,21 @@ def _render_hrbp_dashboard():
     _hrbp_recs_actual_scope_excl = [r for r in _hrbp_recs_actual_scope if not _is_executive(r)]
     _hrbp_dept_quota_base_total = _hrbp_build_dept_grade_stats(_hrbp_recs_quota_scope_excl, use_total_as_base=True)
     _hrbp_dept_actual_total = _hrbp_build_dept_grade_stats(_hrbp_recs_actual_scope_excl, use_total_as_base=True)
+    # 负责范围总体：S/A=20%、B+=15% 按总人数统一计算，不用各部门 floor 后求和（否则会偏小）
+    _hrbp_total_base = sum(dg.get("base_cnt", 0) for dg in _hrbp_dept_quota_base_total.values())
+    _hrbp_total_bmc = sum(dg.get("grade_counts", {}).get("B-", 0) + dg.get("grade_counts", {}).get("C", 0) for dg in _hrbp_dept_actual_total.values())
+    _hrbp_sa_theory_total = math.floor(_hrbp_total_base * 0.20) if _hrbp_total_base else 0
+    _hrbp_bp_base_total = math.floor(_hrbp_total_base * 0.15) if _hrbp_total_base else 0
+    _hrbp_bp_cap_total = math.floor(_hrbp_total_base * 0.25) if _hrbp_total_base else 0
+    _hrbp_bp_theory_total = min(_hrbp_bp_cap_total, _hrbp_bp_base_total + _hrbp_total_bmc)
+    _hrbp_sapb_theory_total = _hrbp_sa_theory_total + _hrbp_bp_theory_total
+    _hrbp_actual_sa_total = sum(ac.get("actual_sa", 0) for ac in _hrbp_dept_actual_total.values())
+    _hrbp_actual_bp_total = sum(ac.get("actual_bp", 0) for ac in _hrbp_dept_actual_total.values())
+    _hrbp_actual_sapb_total = _hrbp_actual_sa_total + _hrbp_actual_bp_total
+    _hrbp_actual_b_total = sum(ac.get("actual_b", 0) for ac in _hrbp_dept_actual_total.values())
+    _hrbp_actual_bm_total = sum(ac.get("actual_bm", 0) for ac in _hrbp_dept_actual_total.values())
+    _hrbp_actual_c_total = sum(ac.get("actual_c", 0) for ac in _hrbp_dept_actual_total.values())
+    _hrbp_actual_sum_total = sum(ac.get("actual_sum", 0) for ac in _hrbp_dept_actual_total.values())
     hrbp_dept_grade_stats_total = {}
     for dept_name in sorted(set(_hrbp_dept_quota_base_total.keys()) | set(_hrbp_dept_actual_total.keys())):
         qb = _hrbp_dept_quota_base_total.get(dept_name, {})
@@ -2676,10 +2781,20 @@ def _render_hrbp_dashboard():
             return f"<td style='text-align:center;color:{c};{_q_cell}' colspan='{col}'>{v}</td>"
         _q_header = _q_th("级别") + _q_th("S/A级别") + _q_th("B+级别") + _q_th("B+及以上级别") + _q_th("B级别") + _q_th("B-级别") + _q_th("C级别") + _q_th("SUM (人)")
         _q_bp_hint = "默认15%，根据实际的B-/C占比调整向上浮动"
-        _all_hrbp_tot = {"sa_theory": 0, "bp_theory": 0, "sapb_theory": 0, "base_cnt": 0, "actual_sa": 0, "actual_bp": 0, "actual_sapb": 0, "actual_b": 0, "actual_bm": 0, "actual_c": 0, "actual_sum": 0}
-        for dg in hrbp_dept_grade_stats_total.values():
-            for k in _all_hrbp_tot:
-                _all_hrbp_tot[k] += dg.get(k, 0)
+        # 负责范围总体用按总人数计算的 20%/15%，不用各部门求和
+        _all_hrbp_tot = {
+            "sa_theory": _hrbp_sa_theory_total,
+            "bp_theory": _hrbp_bp_theory_total,
+            "sapb_theory": _hrbp_sapb_theory_total,
+            "base_cnt": _hrbp_total_base,
+            "actual_sa": _hrbp_actual_sa_total,
+            "actual_bp": _hrbp_actual_bp_total,
+            "actual_sapb": _hrbp_actual_sapb_total,
+            "actual_b": _hrbp_actual_b_total,
+            "actual_bm": _hrbp_actual_bm_total,
+            "actual_c": _hrbp_actual_c_total,
+            "actual_sum": _hrbp_actual_sum_total,
+        }
         _all_hrbp_over_sa = _all_hrbp_tot["actual_sa"] > _all_hrbp_tot["sa_theory"]
         _all_hrbp_over_bp = _all_hrbp_tot["actual_bp"] > _all_hrbp_tot["bp_theory"]
         _all_hrbp_over_sapb = _all_hrbp_tot["actual_sapb"] > _all_hrbp_tot["sapb_theory"]
@@ -2718,7 +2833,7 @@ def _render_hrbp_dashboard():
         </div>
         """
         st.markdown(_all_hrbp_quota_html, unsafe_allow_html=True)
-        st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 配额统计口径：负责范围总体配额中，不含分管高管（因其不能调整自己）。</div>", unsafe_allow_html=True)
+        st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 配额统计口径：负责范围总体配额中，不含分管高管（因为自己不能调整自己）。另，负责范围总体配额由于增加了一级部门负责人，总体额度会大于所有部门配额之和。</div>", unsafe_allow_html=True)
         _hrbp_q_rows = []
         for dept_name in sorted(_hrbp_dept_grade_filtered.keys()):
             dg = _hrbp_dept_grade_filtered[dept_name]
@@ -4088,13 +4203,14 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
     user_name = st.session_state.user_info.get('name', '未知用户')
     emp_id = extract_text(fields.get('工号') or fields.get('员工工号'), st.session_state.user_info.get('emp_id', '未绑定'))
     job_title = extract_text(fields.get('岗位') or fields.get('职位'), st.session_state.user_info.get('job_title', '未分配'))
-    _cycle_from_record = (
+    _cycle_raw = (
         extract_text(fields.get("绩效考核周期"), "").strip()
         or extract_text(fields.get("考核周期"), "").strip()
         or extract_text(fields.get("本次绩效考核周期"), "").strip()
         or extract_text(fields.get("本次考核周期"), "").strip()
         or "2026年上半年"
     )
+    _cycle_from_record = _normalize_cycle_display(_cycle_raw) or _cycle_raw
     current_cycle = _read_admin_cycle_override() or _cycle_from_record
     dept_parts = [d for d in [extract_text(fields.get(f'{k}级部门'), "") for k in ["一", "二", "三", "四"]] if d and d != "未获取"]
     department = "-".join(dept_parts) if dept_parts else "未获取"
@@ -6113,19 +6229,19 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                     is_skip_level = user_name and user_name in rec_skip_level and not is_direct
                                     if (is_direct or is_skip_level) and emp_name != user_name:
                                         report_scoped.append(rec)
-                        # 周期筛选
+                        # 周期筛选；周期统一为展示格式（2026上半年→2026年上半年）
                         def pick_cycle(ff):
                             for k in ["绩效考核周期", "考核周期", "本次绩效考核周期", "本次考核周期"]:
                                 v = extract_text(ff.get(k), "").strip()
                                 if v:
-                                    return v
+                                    return _normalize_cycle_display(v) or v
                             return current_cycle
-                        # 报表周期固定跟随员工信息周期
+                        # 报表周期固定跟随员工信息周期；周期匹配兼容 2026上半年=2026年上半年
                         selected_cycle = current_cycle
                         report_records = []
                         for rec in report_scoped:
                             cyc = pick_cycle(rec.get("fields", {}))
-                            if cyc == selected_cycle:
+                            if _cycles_match(cyc, selected_cycle):
                                 report_records.append(rec)
                         total_cnt = len(report_records)
                         if total_cnt == 0:
@@ -6181,8 +6297,9 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                 vp_adj = extract_text(f.get("分管高管调整考核结果"), "").strip()
                                 dept_adj = extract_text(f.get("一级部门调整考核结果"), "").strip()
                                 mgr_grade = extract_text(f.get("考核结果"), "").strip()
+                                final_from_field = extract_text(f.get("最终绩效结果") or f.get("最终考核结果"), "").strip()
                                 final_grade = "-"
-                                for cand in [vp_adj, dept_adj, mgr_grade]:
+                                for cand in [vp_adj, dept_adj, mgr_grade, final_from_field]:
                                     if cand in GRADE_OPTIONS:
                                         final_grade = cand
                                         break
@@ -6410,8 +6527,9 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                     vp_adj = extract_text(rf.get("分管高管调整考核结果"), "").strip()
                                     dept_adj = extract_text(rf.get("一级部门调整考核结果"), "").strip()
                                     mgr_grade = extract_text(rf.get("考核结果"), "").strip()
+                                    final_grade = extract_text(rf.get("最终绩效结果") or rf.get("最终考核结果"), "").strip()
                                     fg = "-"
-                                    for cand in [vp_adj, dept_adj, mgr_grade]:
+                                    for cand in [vp_adj, dept_adj, mgr_grade, final_grade]:
                                         if cand in GRADE_OPTIONS:
                                             fg = cand
                                             break
@@ -6454,8 +6572,9 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                 vp_adj = extract_text(f.get("分管高管调整考核结果"), "").strip()
                                 dept_adj = extract_text(f.get("一级部门调整考核结果"), "").strip()
                                 mgr_grade = extract_text(f.get("考核结果"), "").strip()
+                                final_from_field = extract_text(f.get("最终绩效结果") or f.get("最终考核结果"), "").strip()
                                 final_grade = "-"
-                                for cand in [vp_adj, dept_adj, mgr_grade]:
+                                for cand in [vp_adj, dept_adj, mgr_grade, final_from_field]:
                                     if cand in GRADE_OPTIONS:
                                         final_grade = cand
                                         break
@@ -6539,6 +6658,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                             </div>
                             """
                             st.markdown(table_html, unsafe_allow_html=True)
+                            st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 配额统计口径：负责范围总体配额中，不含分管高管（因为自己不能调整自己）。另，负责范围总体配额由于增加了一级部门负责人，总体额度会大于所有部门配额之和。</div>", unsafe_allow_html=True)
 
                             if is_vp and dept_grade_stats:
                                 st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
