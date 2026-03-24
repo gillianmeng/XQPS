@@ -69,7 +69,30 @@ if 'admin_role' not in st.session_state:
 if 'admin_scope' not in st.session_state:
     st.session_state.admin_scope = None
 
-ADMIN_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admin_config.json")
+def _resolve_admin_config_path():
+    """确定 admin_config.json 的路径。优先可写目录，保证本地与部署环境一致。"""
+    # 1. 环境变量指定（部署时显式设置）
+    env_dir = os.environ.get("XQPS_CONFIG_DIR", "").strip()
+    if env_dir:
+        d = os.path.abspath(env_dir)
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, "admin_config.json")
+    # 2. 项目目录，先尝试是否可写
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    _test = os.path.join(project_dir, ".xqps_write_test")
+    try:
+        with open(_test, "w") as f:
+            f.write("1")
+        os.remove(_test)
+        return os.path.join(project_dir, "admin_config.json")
+    except Exception:
+        pass
+    # 3. 项目目录不可写时，自动回退到用户目录（公司部署常见情况）
+    fallback = os.path.expanduser("~/xqps_config")
+    os.makedirs(fallback, exist_ok=True)
+    return os.path.join(fallback, "admin_config.json")
+
+ADMIN_CONFIG_PATH = _resolve_admin_config_path()
 ANNOUNCE_LOCATIONS = ["员工自评", "上级评分", "一级部门负责人调整", "分管高管调整"]
 DOC_LINK_NAMES = ["雪球集团绩效管理制度", "雪球集团绩效管理实施细则", "绩效考核系统操作指引"]
 DEFAULT_DOC_LINK = "https://xueqiu.feishu.cn/wiki/RL1OwdkJ9iQnRakIcj6cXKRSnfg"  # 雪球集团绩效管理制度 默认
@@ -108,12 +131,16 @@ def _read_admin_config():
     return {}
 
 def _write_admin_config(data):
-    """写入管理员配置"""
+    """写入管理员配置。失败时返回 False（如无写权限）"""
     try:
+        _dir = os.path.dirname(ADMIN_CONFIG_PATH)
+        if _dir and not os.path.exists(_dir):
+            os.makedirs(_dir, exist_ok=True)
         with open(ADMIN_CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return True
-    except Exception:
+    except Exception as e:
+        print(f"[XQPS] admin_config 写入失败: {e}", flush=True)
         return False
 
 def _read_admin_cycle_override():
@@ -454,11 +481,12 @@ def _is_executive(rec):
     return v == "高管"
 
 
-def _build_detail_stats(records, extract_text_fn=None, dept_key="一级部门"):
+def _build_detail_stats(records, extract_text_fn=None, dept_key="一级部门", exclude_exec_from_dept=False):
     """
     构建部门绩效详情统计：高管单列，各部门含一级部门负责人。
     返回 (exec_stats, dept_stats)，dept_stats 的 key 为部门名。
     dept_key: "一级部门" 或 "二级部门"（二级部门时若为空则退回到一级部门）
+    exclude_exec_from_dept: 为 True 时（HRBP 视图），高管不进入 dept_stats，也不进入 exec_stats（高管由 exec_by_name 单独展示）
     exec_stats / dept_stats 结构: total, done, grades, sales_total, sales_done, sales_grades, non_sales_total, non_sales_done, non_sales_grades
     """
     ex = extract_text_fn or _extract_text
@@ -475,6 +503,8 @@ def _build_detail_stats(records, extract_text_fn=None, dept_key="一级部门"):
             final_grade = "-"
         is_sales = ex(f.get("是否绩效关联奖金"), "").strip() == "否"
         is_exec = _is_executive(rec)
+        if exclude_exec_from_dept and is_exec:
+            continue  # HRBP：高管不进入部门统计，由 exec_by_name 单独展示
         if is_exec:
             t = exec_stats
         else:
@@ -800,8 +830,10 @@ def _render_admin_dashboard():
             _ann_loc_cfg = st.selectbox("公告位置", options=ANNOUNCE_LOCATIONS, key="admin_ann_loc_cfg_empty", label_visibility="collapsed")
             _ann_val = st.text_area("公告内容", value=_cc["announcements"].get(_ann_loc_cfg) or "", key="admin_ann_cfg_empty", height=80, label_visibility="collapsed", placeholder="由管理员填写，留空则无公告")
             if st.button("保存公告", key="admin_save_ann_cfg_empty"):
-                _write_admin_announcement(_ann_loc_cfg, _ann_val, cycle=_config_cycle)
-                st.success("已保存")
+                if _write_admin_announcement(_ann_loc_cfg, _ann_val, cycle=_config_cycle):
+                    st.success("已保存")
+                else:
+                    st.error("保存失败，可能是目录无写权限。可设置环境变量 XQPS_CONFIG_DIR 指定可写路径。")
             st.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:10px 0;'/>", unsafe_allow_html=True)
             st.caption("文档链接")
             _doc_links_cfg = dict(_read_admin_doc_links(_config_cycle))
@@ -810,13 +842,17 @@ def _render_admin_dashboard():
                 _val = st.text_input(_dn, value=_def, key=f"admin_doc_cfg_empty_{i}", placeholder=f"粘贴 {_dn} 链接")
                 _doc_links_cfg[_dn] = (_val or "").strip()
             if st.button("保存文档链接", key="admin_save_doc_cfg_empty"):
-                _write_admin_doc_links(_doc_links_cfg, cycle=_config_cycle)
-                st.success("已保存")
+                if _write_admin_doc_links(_doc_links_cfg, cycle=_config_cycle):
+                    st.success("已保存")
+                else:
+                    st.error("保存失败，可能是目录无写权限。可设置环境变量 XQPS_CONFIG_DIR 指定可写路径。")
             st.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:10px 0;'/>", unsafe_allow_html=True)
             if st.button("✅ 配置完成", type="primary", key="admin_config_done_empty"):
-                _set_cycle_config_complete(_config_cycle, True)
-                st.success(f"已标记「{_config_cycle}」配置完成")
-                st.rerun()
+                if _set_cycle_config_complete(_config_cycle, True):
+                    st.success(f"已标记「{_config_cycle}」配置完成")
+                    st.rerun()
+                else:
+                    st.error("保存失败，可能是目录无写权限。可设置环境变量 XQPS_CONFIG_DIR 指定可写路径。")
         st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
         _edit_disabled_empty = _read_module_edit_disabled()
         _full_shutdown_empty = _read_full_shutdown()
@@ -1261,8 +1297,10 @@ def _render_admin_dashboard():
         _ann_loc_cfg = st.selectbox("公告位置", options=ANNOUNCE_LOCATIONS, key="admin_ann_loc_cfg", label_visibility="collapsed")
         _ann_val = st.text_area("公告内容", value=_cc["announcements"].get(_ann_loc_cfg) or "", key="admin_ann_cfg", height=80, label_visibility="collapsed", placeholder="由管理员填写，留空则无公告")
         if st.button("保存公告", key="admin_save_ann_cfg"):
-            _write_admin_announcement(_ann_loc_cfg, _ann_val, cycle=_config_cycle)
-            st.success("已保存")
+            if _write_admin_announcement(_ann_loc_cfg, _ann_val, cycle=_config_cycle):
+                st.success("已保存")
+            else:
+                st.error("保存失败，可能是目录无写权限。可设置环境变量 XQPS_CONFIG_DIR 指定可写路径。")
         st.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:10px 0;'/>", unsafe_allow_html=True)
         st.caption("文档链接")
         _doc_links_cfg = dict(_read_admin_doc_links(_config_cycle))
@@ -1271,13 +1309,17 @@ def _render_admin_dashboard():
             _val = st.text_input(_dn, value=_def, key=f"admin_doc_cfg_{i}", placeholder=f"粘贴 {_dn} 链接")
             _doc_links_cfg[_dn] = (_val or "").strip()
         if st.button("保存文档链接", key="admin_save_doc_cfg"):
-            _write_admin_doc_links(_doc_links_cfg, cycle=_config_cycle)
-            st.success("已保存")
+            if _write_admin_doc_links(_doc_links_cfg, cycle=_config_cycle):
+                st.success("已保存")
+            else:
+                st.error("保存失败，可能是目录无写权限。可设置环境变量 XQPS_CONFIG_DIR 指定可写路径。")
         st.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:10px 0;'/>", unsafe_allow_html=True)
         if st.button("✅ 配置完成", type="primary", key="admin_config_done"):
-            _set_cycle_config_complete(_config_cycle, True)
-            st.success(f"已标记「{_config_cycle}」配置完成")
-            st.rerun()
+            if _set_cycle_config_complete(_config_cycle, True):
+                st.success(f"已标记「{_config_cycle}」配置完成")
+                st.rerun()
+            else:
+                st.error("保存失败，可能是目录无写权限。可设置环境变量 XQPS_CONFIG_DIR 指定可写路径。")
     st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
     _edit_disabled = _read_module_edit_disabled()
     _full_shutdown = _read_full_shutdown()
@@ -2057,6 +2099,10 @@ def _render_hrbp_dashboard():
     if _sel_dept and _sel_dept != "全部部门":
         report_records = [r for r in report_records if (_clean_dept_name(r.get("fields", {}).get("一级部门")) or "未分配部门") == _sel_dept]
 
+    # HRBP/HRBP Lead：高管仍显示，但绩效数据（等级、完成情况等）用「-」表示，统计时排除高管
+    _hrbp_excl_exec = [r for r in report_records if not _is_executive(r)]  # 当前筛选下的非高管
+    _hrbp_excl_exec_for_kpi = [r for r in report_records_for_hrbp_kpi if not _is_executive(r)]  # KPI 用，不受筛选影响
+
     total_cnt = len(report_records)
     if total_cnt == 0:
         scope_hint = f"负责部门：{', '.join(scope_depts) if scope_depts else '未配置'}"
@@ -2082,35 +2128,38 @@ def _render_hrbp_dashboard():
     target_set_cnt = self_done_cnt = mgr_done_cnt = dept_done_cnt = vp_done_cnt = 0
     grade_counts = Counter()
     dept_stats = {}
-    # 各步骤人员列表（用于点击查看）
+    # 各步骤人员列表（用于点击查看）；高管不计入绩效统计，不进入人员列表
     step_people = {"target_set": [], "self_done": [], "mgr_done": [], "dept_done": [], "vp_done": []}
     grade_people = {g: [] for g in GRADE_OPTIONS}
     for rec in report_records:
         f = rec.get("fields", {})
+        _skip_perf = _is_executive(rec)  # HRBP 高管不参与绩效统计
         name = _extract_text(f.get("姓名"), "未知").strip()
         emp_id = _extract_text(f.get("工号") or f.get("员工工号"), "").strip()
         dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
         person = {"name": name, "emp_id": emp_id, "dept": dept_l1}
         has_target = any(_extract_text(f.get(f"工作目标{i}及总结"), "").strip() for i in range(1, 6))
-        if has_target:
-            target_set_cnt += 1
-            step_people["target_set"].append(person)
+        if not _skip_perf:
+            if has_target:
+                target_set_cnt += 1
+                step_people["target_set"].append(person)
         self_done = _extract_text(f.get("自评是否提交"), "").strip() == "是"
         mgr_done = _extract_text(f.get("上级评价是否完成"), "").strip() == "是"
         dept_done = _extract_text(f.get("一级部门调整完毕"), "").strip() == "是"
         vp_done = _extract_text(f.get("分管高管调整完毕"), "").strip() == "是"
-        if self_done:
-            self_done_cnt += 1
-            step_people["self_done"].append(person)
-        if mgr_done:
-            mgr_done_cnt += 1
-            step_people["mgr_done"].append(person)
-        if dept_done:
-            dept_done_cnt += 1
-            step_people["dept_done"].append(person)
-        if vp_done:
-            vp_done_cnt += 1
-            step_people["vp_done"].append(person)
+        if not _skip_perf:
+            if self_done:
+                self_done_cnt += 1
+                step_people["self_done"].append(person)
+            if mgr_done:
+                mgr_done_cnt += 1
+                step_people["mgr_done"].append(person)
+            if dept_done:
+                dept_done_cnt += 1
+                step_people["dept_done"].append(person)
+            if vp_done:
+                vp_done_cnt += 1
+                step_people["vp_done"].append(person)
         vp_adj = _extract_text(f.get("分管高管调整考核结果"), "").strip()
         dept_adj = _extract_text(f.get("一级部门调整考核结果"), "").strip()
         mgr_grade = _extract_text(f.get("考核结果"), "").strip()
@@ -2119,56 +2168,57 @@ def _render_hrbp_dashboard():
             if cand in GRADE_OPTIONS:
                 final_grade = cand
                 break
-        if final_grade in GRADE_OPTIONS:
+        if not _skip_perf and final_grade in GRADE_OPTIONS:
             grade_counts[final_grade] += 1
             grade_people[final_grade].append(person)
-        _base = {"total": 0, "done": 0, "target_set": 0, "self_done": 0, "dept_done": 0, "vp_done": 0, "grades": {g: 0 for g in GRADE_OPTIONS}}
-        dept_info = dept_stats.setdefault(dept_l1, {
-            **_base,
-            "sales_total": 0, "sales_done": 0, "sales_grades": {g: 0 for g in GRADE_OPTIONS},
-            "non_sales_total": 0, "non_sales_done": 0, "non_sales_grades": {g: 0 for g in GRADE_OPTIONS},
-        })
-        dept_info["total"] += 1
-        if has_target:
-            dept_info["target_set"] += 1
-        if self_done:
-            dept_info["self_done"] += 1
-        if mgr_done:
-            dept_info["done"] += 1
-        if dept_done:
-            dept_info["dept_done"] += 1
-        if vp_done:
-            dept_info["vp_done"] += 1
-        if final_grade in GRADE_OPTIONS:
-            dept_info["grades"][final_grade] += 1
-        is_sales = _extract_text(f.get("是否绩效关联奖金"), "").strip() == "否"
-        if is_sales:
-            dept_info["sales_total"] += 1
+        if not _skip_perf:
+            _base = {"total": 0, "done": 0, "target_set": 0, "self_done": 0, "dept_done": 0, "vp_done": 0, "grades": {g: 0 for g in GRADE_OPTIONS}}
+            dept_info = dept_stats.setdefault(dept_l1, {
+                **_base,
+                "sales_total": 0, "sales_done": 0, "sales_grades": {g: 0 for g in GRADE_OPTIONS},
+                "non_sales_total": 0, "non_sales_done": 0, "non_sales_grades": {g: 0 for g in GRADE_OPTIONS},
+            })
+            dept_info["total"] += 1
+            if has_target:
+                dept_info["target_set"] += 1
+            if self_done:
+                dept_info["self_done"] += 1
             if mgr_done:
-                dept_info["sales_done"] += 1
+                dept_info["done"] += 1
+            if dept_done:
+                dept_info["dept_done"] += 1
+            if vp_done:
+                dept_info["vp_done"] += 1
             if final_grade in GRADE_OPTIONS:
-                dept_info["sales_grades"][final_grade] += 1
-        else:
-            dept_info["non_sales_total"] += 1
-            if mgr_done:
-                dept_info["non_sales_done"] += 1
-            if final_grade in GRADE_OPTIONS:
-                dept_info["non_sales_grades"][final_grade] += 1
+                dept_info["grades"][final_grade] += 1
+            is_sales = _extract_text(f.get("是否绩效关联奖金"), "").strip() == "否"
+            if is_sales:
+                dept_info["sales_total"] += 1
+                if mgr_done:
+                    dept_info["sales_done"] += 1
+                if final_grade in GRADE_OPTIONS:
+                    dept_info["sales_grades"][final_grade] += 1
+            else:
+                dept_info["non_sales_total"] += 1
+                if mgr_done:
+                    dept_info["non_sales_done"] += 1
+                if final_grade in GRADE_OPTIONS:
+                    dept_info["non_sales_grades"][final_grade] += 1
 
     report_sales = [r for r in report_records if _extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "否"]
     report_non_sales = [r for r in report_records if _extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "是"]
     report_sales_for_scope_quota = [r for r in report_records_for_scope_quota if _extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "否"]
     report_non_sales_for_scope_quota = [r for r in report_records_for_scope_quota if _extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "是"]
     has_bonus_no = len(report_sales) > 0 and len(report_non_sales) > 0
-    # 部门绩效详情：不受筛选影响，始终展示负责范围全量；高管单列，各部门含一级部门负责人
-    exec_stats_for_detail, dept_stats_for_detail = _build_detail_stats(report_records_for_hrbp_kpi)
+    # 部门绩效详情：不受筛选影响，始终展示负责范围全量；高管单列（绩效用「-」），各部门不含高管
+    exec_stats_for_detail, dept_stats_for_detail = _build_detail_stats(report_records_for_hrbp_kpi, exclude_exec_from_dept=True)
     # HRBP：按分管高管分组部门；高管按本人姓名统计（仅 特殊判断=高管）
     vp_to_depts = {}
     exec_by_name = {}  # 按高管本人姓名
     exec_to_vps = {}   # exec_name -> set(vps) 用于按 VP 分组展示
 
     def _fresh_hrbp_detail():
-        return {"total": 0, "done": 0, "grades": {g: 0 for g in GRADE_OPTIONS}, "sales_total": 0, "sales_done": 0, "sales_grades": {g: 0 for g in GRADE_OPTIONS}, "non_sales_total": 0, "non_sales_done": 0, "non_sales_grades": {g: 0 for g in GRADE_OPTIONS}}
+        return {"total": 0, "done": 0, "grades": {g: 0 for g in GRADE_OPTIONS}, "sales_total": 0, "sales_done": 0, "sales_grades": {g: 0 for g in GRADE_OPTIONS}, "non_sales_total": 0, "non_sales_done": 0, "non_sales_grades": {g: 0 for g in GRADE_OPTIONS}, "mask_perf": False}
     for rec in report_records_for_hrbp_kpi:
         f = rec.get("fields", {})
         vp_str = _extract_text(f.get("分管高管") or f.get("高管"), "").strip()
@@ -2181,24 +2231,10 @@ def _render_hrbp_dashboard():
         if _is_executive(rec):
             exec_name = _extract_text(f.get("姓名"), "").strip() or "未知"
             t = exec_by_name.setdefault(exec_name, _fresh_hrbp_detail())
+            t["mask_perf"] = True  # HRBP 高管绩效用「-」显示
             exec_to_vps.setdefault(exec_name, set()).update(vps)
             t["total"] += 1
-            if mgr_done:
-                t["done"] += 1
-            if final_grade in GRADE_OPTIONS:
-                t["grades"][final_grade] += 1
-            if is_sales:
-                t["sales_total"] += 1
-                if mgr_done:
-                    t["sales_done"] += 1
-                if final_grade in GRADE_OPTIONS:
-                    t["sales_grades"][final_grade] += 1
-            else:
-                t["non_sales_total"] += 1
-                if mgr_done:
-                    t["non_sales_done"] += 1
-                if final_grade in GRADE_OPTIONS:
-                    t["non_sales_grades"][final_grade] += 1
+            # 不累计 done/grades，展示时用「-」
         else:
             for vp in vps:
                 dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
@@ -2209,11 +2245,12 @@ def _render_hrbp_dashboard():
             st.session_state.hrbp_report_bonus_scope_filter = "全部"
         _sk = st.session_state.hrbp_report_bonus_scope_filter
         report_scope = report_records if _sk == "全部" else (report_sales if _sk == "销售" else report_non_sales)
-    base_cnt = len(report_scope) if report_scope else total_cnt
-    scope_done = sum(1 for r in (report_scope or []) if _extract_text(r.get("fields", {}).get("上级评价是否完成"), "").strip() == "是")
+    _scope_excl_exec = [r for r in (report_scope or report_records) if not _is_executive(r)]  # 高管不参与绩效统计
+    base_cnt = len(_scope_excl_exec) if _scope_excl_exec else total_cnt
+    scope_done = sum(1 for r in _scope_excl_exec if _extract_text(r.get("fields", {}).get("上级评价是否完成"), "").strip() == "是")
     completion_rate = 0 if base_cnt == 0 else round(scope_done / base_cnt * 100, 1)
     grade_counts_bonus = Counter()
-    for rec in (report_scope or report_records):
+    for rec in _scope_excl_exec:
         f = rec.get("fields", {})
         vp_adj = _extract_text(f.get("分管高管调整考核结果"), "").strip()
         dept_adj = _extract_text(f.get("一级部门调整考核结果"), "").strip()
@@ -2288,10 +2325,10 @@ def _render_hrbp_dashboard():
     # 主体内容（居中对齐）
     st.markdown("<div class='hrbp-view-container'></div>", unsafe_allow_html=True)
     st.markdown("<div class='module-title'>📊 HRBP 绩效概览</div>", unsafe_allow_html=True)
-    # KPI：与管理员一致，不受筛选影响（考核总人数、已完成评价、总体完成率、剩余未评）
+    # KPI：考核总人数含高管；已完成评价/总体完成率/剩余未评排除高管（高管绩效用「-」显示）
     hrbp_kpi_total = len(report_records_for_hrbp_kpi)
     hrbp_kpi_done = 0
-    for r in report_records_for_hrbp_kpi:
+    for r in _hrbp_excl_exec_for_kpi:
         f = r.get("fields", {})
         final = _extract_text(f.get("最终考核结果"), "").strip()
         if final in GRADE_OPTIONS:
@@ -2301,8 +2338,9 @@ def _render_hrbp_dashboard():
                 if cand in GRADE_OPTIONS:
                     hrbp_kpi_done += 1
                     break
-    hrbp_kpi_rate = round(hrbp_kpi_done / hrbp_kpi_total * 100, 1) if hrbp_kpi_total else 0
-    hrbp_kpi_remaining = hrbp_kpi_total - hrbp_kpi_done
+    _hrbp_kpi_denom = len(_hrbp_excl_exec_for_kpi)  # 完成率分母排除高管
+    hrbp_kpi_rate = round(hrbp_kpi_done / _hrbp_kpi_denom * 100, 1) if _hrbp_kpi_denom else 0
+    hrbp_kpi_remaining = _hrbp_kpi_denom - hrbp_kpi_done
     _hrbp_kpi_html = f"""
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:12px;">
         <div style="flex:1;min-width:120px;text-align:center;padding:16px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08);" title="此为绩效考核总数，包含分管高管、一级部门负责人">
@@ -2567,7 +2605,7 @@ def _render_hrbp_dashboard():
         report_records if st.session_state.get("hrbp_report_bonus_scope_filter", "全部") == "全部"
         else (report_sales if st.session_state.hrbp_report_bonus_scope_filter == "销售" else report_non_sales)
     )
-    # 负责范围总体：仅随分管高管变，不随一级部门变（用 scope 数据）
+    # 负责范围总体：仅随分管高管变，不随一级部门变（用 scope 数据）；配额实际人数排除高管
     _hrbp_recs_quota_scope = report_records_for_scope_quota if not has_bonus_no else (
         report_records_for_scope_quota if st.session_state.get("hrbp_report_bonus_scope_filter", "全部") == "全部"
         else (report_sales_for_scope_quota if st.session_state.hrbp_report_bonus_scope_filter == "销售" else report_non_sales_for_scope_quota)
@@ -2576,8 +2614,10 @@ def _render_hrbp_dashboard():
         report_records_for_scope_quota if st.session_state.get("hrbp_report_bonus_scope_filter", "全部") == "全部"
         else (report_sales_for_scope_quota if st.session_state.hrbp_report_bonus_scope_filter == "销售" else report_non_sales_for_scope_quota)
     )
-    _hrbp_dept_quota_base_total = _hrbp_build_dept_grade_stats(_hrbp_recs_quota_scope, use_total_as_base=True)
-    _hrbp_dept_actual_total = _hrbp_build_dept_grade_stats(_hrbp_recs_actual_scope, use_total_as_base=True)
+    _hrbp_recs_quota_scope_excl = [r for r in _hrbp_recs_quota_scope if not _is_executive(r)]
+    _hrbp_recs_actual_scope_excl = [r for r in _hrbp_recs_actual_scope if not _is_executive(r)]
+    _hrbp_dept_quota_base_total = _hrbp_build_dept_grade_stats(_hrbp_recs_quota_scope_excl, use_total_as_base=True)
+    _hrbp_dept_actual_total = _hrbp_build_dept_grade_stats(_hrbp_recs_actual_scope_excl, use_total_as_base=True)
     hrbp_dept_grade_stats_total = {}
     for dept_name in sorted(set(_hrbp_dept_quota_base_total.keys()) | set(_hrbp_dept_actual_total.keys())):
         qb = _hrbp_dept_quota_base_total.get(dept_name, {})
@@ -2595,9 +2635,9 @@ def _render_hrbp_dashboard():
             "actual_c": ac.get("actual_c", 0),
             "actual_sum": ac.get("actual_sum", 0),
         }
-    # 各部门配额：排除一级部门负责人（不能调整自己）
-    _hrbp_recs_quota_excl = [r for r in _hrbp_recs_quota if not _is_dept_head(r)]
-    _hrbp_recs_actual_excl = [r for r in _hrbp_recs_actual if not _is_dept_head(r)]
+    # 各部门配额：排除一级部门负责人（不能调整自己）、排除高管（绩效用「-」显示）
+    _hrbp_recs_quota_excl = [r for r in _hrbp_recs_quota if not _is_dept_head(r) and not _is_executive(r)]
+    _hrbp_recs_actual_excl = [r for r in _hrbp_recs_actual if not _is_dept_head(r) and not _is_executive(r)]
     _hrbp_dept_quota_base = _hrbp_build_dept_grade_stats(_hrbp_recs_quota_excl, use_total_as_base=True)
     _hrbp_dept_actual = _hrbp_build_dept_grade_stats(_hrbp_recs_actual_excl, use_total_as_base=True)
     hrbp_dept_grade_stats = {}
@@ -2729,9 +2769,11 @@ def _render_hrbp_dashboard():
     dept_rows = []
     _indent_hrbp = "\u2003\u2003"
 
-    def _row(dept, scope, t, d, g, indent=0):
-        rv = round(d / t * 100, 1) if t else 0
+    def _row(dept, scope, t, d, g, indent=0, mask_perf=False):
         disp_dept = (_indent_hrbp * indent) + dept if indent else dept
+        if mask_perf:
+            return {"部门": disp_dept, "口径": scope, "总人数": t, "已完成": "-", "完成率": "-", "S级": "-", "A级": "-", "B+级": "-", "B级": "-", "B-级": "-", "C级": "-"}
+        rv = round(d / t * 100, 1) if t else 0
         return {"部门": disp_dept, "口径": scope, "总人数": t, "已完成": d, "完成率": "100%" if rv == 100 else f"{rv}%", "S级": g["S"], "A级": g["A"], "B+级": g["B+"], "B级": g["B"], "B-级": g["B-"], "C级": g["C"]}
     exec_responsible = set(vp_to_depts.keys()) & set(exec_by_name.keys())
     _single_list_depts_hrbp = {"人力资源部", "战略发展部"}
@@ -2753,10 +2795,11 @@ def _render_hrbp_dashboard():
         if vp_name in exec_by_name and vp_name in exec_responsible:
             dval = exec_by_name[vp_name]
             if dval["total"] > 0:
-                dept_rows.append(_row(f"高管（{vp_name}）", "总", dval["total"], dval["done"], dval["grades"], indent=0))
+                _m = dval.get("mask_perf", False)
+                dept_rows.append(_row(f"高管（{vp_name}）", "总", dval["total"], dval["done"], dval["grades"], indent=0, mask_perf=_m))
                 if (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0:
-                    dept_rows.append(_row(f"高管（{vp_name}）", "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"]), indent=1))
-                    dept_rows.append(_row(f"高管（{vp_name}）", "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"]), indent=1))
+                    dept_rows.append(_row(f"高管（{vp_name}）", "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"]), indent=1, mask_perf=_m))
+                    dept_rows.append(_row(f"高管（{vp_name}）", "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"]), indent=1, mask_perf=_m))
         for exec_name in sorted(exec_by_name.keys()):
             if exec_name == vp_name or exec_name in exec_responsible:
                 continue
@@ -2764,10 +2807,11 @@ def _render_hrbp_dashboard():
                 continue
             dval = exec_by_name[exec_name]
             if dval["total"] > 0:
-                dept_rows.append(_row(f"高管（{exec_name}）", "总", dval["total"], dval["done"], dval["grades"], indent=1))
+                _m = dval.get("mask_perf", False)
+                dept_rows.append(_row(f"高管（{exec_name}）", "总", dval["total"], dval["done"], dval["grades"], indent=1, mask_perf=_m))
                 if (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0:
-                    dept_rows.append(_row(f"高管（{exec_name}）", "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"]), indent=2))
-                    dept_rows.append(_row(f"高管（{exec_name}）", "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"]), indent=2))
+                    dept_rows.append(_row(f"高管（{exec_name}）", "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"]), indent=2, mask_perf=_m))
+                    dept_rows.append(_row(f"高管（{exec_name}）", "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"]), indent=2, mask_perf=_m))
         for dept_name in sorted(vp_to_depts.get(vp_name, [])):
             if dept_name in _dept_need_single_list_hrbp:
                 continue
@@ -2790,10 +2834,11 @@ def _render_hrbp_dashboard():
             continue
         dval = exec_by_name[exec_name]
         if dval["total"] > 0:
-            dept_rows.append(_row(f"高管（{exec_name}）", "总", dval["total"], dval["done"], dval["grades"], indent=0))
+            _m = dval.get("mask_perf", False)
+            dept_rows.append(_row(f"高管（{exec_name}）", "总", dval["total"], dval["done"], dval["grades"], indent=0, mask_perf=_m))
             if (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0:
-                dept_rows.append(_row(f"高管（{exec_name}）", "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"]), indent=1))
-                dept_rows.append(_row(f"高管（{exec_name}）", "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"]), indent=1))
+                dept_rows.append(_row(f"高管（{exec_name}）", "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"]), indent=1, mask_perf=_m))
+                dept_rows.append(_row(f"高管（{exec_name}）", "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"]), indent=1, mask_perf=_m))
     dept_df = pd.DataFrame(dept_rows)
     if not dept_df.empty:
         def _dept_row_style(row):
@@ -2819,10 +2864,15 @@ def _render_hrbp_dashboard():
 
     st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
     st.markdown("<div class='module-title' style='text-align:center;'>📥 数据下载</div>", unsafe_allow_html=True)
+    _perf_cols = {"考核结果", "最终考核结果", "最终绩效结果", "上级评价是否完成", "分管高管调整考核结果", "一级部门调整考核结果"}
     _flat_rows = []
     for rec in report_records:
         f = rec.get("fields", {})
         row = {k: _extract_text(v, "") for k, v in f.items()}
+        if _is_executive(rec):
+            for k in _perf_cols:
+                if k in row:
+                    row[k] = "-"
         _flat_rows.append(row)
     _download_df = pd.DataFrame(_flat_rows)
     if not _download_df.empty:
