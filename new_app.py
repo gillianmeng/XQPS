@@ -47,6 +47,8 @@ if missing:
     st.stop()
 
 SCORE_OPTIONS = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+# 员工自评：每个工作目标权重单项下限（0% 不可提交）
+GOAL_WEIGHT_MIN_PCT = 5
 GRADE_OPTIONS = ["S", "A", "B+", "B", "B-", "C"]
 # 绩效等级图表配色（S/A蓝、B+绿、B灰、B-橙、C红），全应用统一
 GRADE_CHART_COLORS = ["#4CAFEE", "#4CAFEE", "#8BC34A", "#90A4AE", "#FFC107", "#F44336"]
@@ -487,6 +489,22 @@ def _is_executive(rec):
     return v == "高管"
 
 
+# HRBP / HRBP Lead 报表导出：若某版含高管行，则高管仅保留下列字段、其余填「-」。当前导出已排除高管行，常量保留供对照与扩展。
+HRBP_EXPORT_EXEC_KEEP_FIELDS = frozenset({
+    "姓名", "工号", "员工工号",
+    "岗位", "职位", "角色",
+    "一级部门", "二级部门", "三级部门", "四级部门",
+    "直接评价人", "评价人", "隔级上级",
+    "一级部门负责人", "部门负责人",
+    "分管高管", "高管",
+    "HRBP", "HRBP Lead",
+    "绩效考核周期", "考核周期", "本次绩效考核周期", "本次考核周期",
+    "特殊判断",
+    "后台角色",
+    "是否绩效关联奖金",
+})
+
+
 def _build_detail_stats(records, extract_text_fn=None, dept_key="一级部门", exclude_exec_from_dept=False):
     """
     构建部门绩效详情统计：高管单列，各部门含一级部门负责人。
@@ -753,7 +771,7 @@ def _render_admin_dashboard():
     if _sel_dept and _sel_dept != "全部部门":
         report_records = [r for r in report_records if (_clean_dept_name(r.get("fields", {}).get("一级部门")) or "未分配部门") == _sel_dept]
 
-    # 上方 KPI：不随筛选变化，展示当前绩效进展。已完成评价=飞书「最终考核结果」不为空
+    # 上方 KPI：不随筛选变化，展示当前绩效进展。已完成评价=「最终考核结果」不为空即「已完成本次绩效考核」
     kpi_total = len(report_records_for_quota)
     kpi_done = sum(
         1 for r in report_records_for_quota
@@ -1436,8 +1454,8 @@ def _render_admin_dashboard():
             <div class="report-kpi-label" title="含管理员及分管高管在内，全公司参与考核人数；以下绩效统计按筛选展示" style="cursor:help;white-space:nowrap;">考核总人数 ⓘ</div>
             <div style="font-size:32px;font-weight:700;color:#42A5F5;margin-top:8px;">{kpi_total}</div>
         </div>
-        <div style="flex:1;min-width:120px;text-align:center;padding:16px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08);" title="对应「最终考核结果」不为空">
-            <div class="report-kpi-label" title="对应「最终考核结果」不为空" style="cursor:help;white-space:nowrap;">已完成评价 ⓘ</div>
+        <div style="flex:1;min-width:120px;text-align:center;padding:16px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08);" title="对应「最终考核结果」不为空，也就是说「已完成本次绩效考核」">
+            <div class="report-kpi-label" title="对应「最终考核结果」不为空，也就是说「已完成本次绩效考核」" style="cursor:help;white-space:nowrap;">已完成评价 ⓘ</div>
             <div style="font-size:32px;font-weight:700;color:#26A69A;margin-top:8px;">{kpi_done}</div>
         </div>
         <div style="flex:1;min-width:120px;text-align:center;padding:16px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08);">
@@ -2156,6 +2174,9 @@ def _render_hrbp_dashboard():
             continue
         report_records.append(rec)
 
+    # HRBP/HRBP Lead：不展示、不统计「特殊判断」为高管的人员（与导出一致）
+    report_records = [r for r in report_records if not _is_executive(r)]
+
     # 分管高管、一级部门筛选（与管理员一致，选项限定在负责范围内）
     _hrbp_vp_names = set()
     for rec in report_records:
@@ -2185,9 +2206,8 @@ def _render_hrbp_dashboard():
     if _sel_dept and _sel_dept != "全部部门":
         report_records = [r for r in report_records if (_clean_dept_name(r.get("fields", {}).get("一级部门")) or "未分配部门") == _sel_dept]
 
-    # HRBP/HRBP Lead：高管仍显示，但绩效数据（等级、完成情况等）用「-」表示，统计时排除高管
-    _hrbp_excl_exec = [r for r in report_records if not _is_executive(r)]  # 当前筛选下的非高管
-    _hrbp_excl_exec_for_kpi = [r for r in report_records_for_hrbp_kpi if not _is_executive(r)]  # KPI 用，不受筛选影响
+    _hrbp_excl_exec = report_records
+    _hrbp_excl_exec_for_kpi = report_records_for_hrbp_kpi
 
     total_cnt = len(report_records)
     if total_cnt == 0:
@@ -2214,12 +2234,12 @@ def _render_hrbp_dashboard():
     target_set_cnt = self_done_cnt = mgr_done_cnt = dept_done_cnt = vp_done_cnt = 0
     grade_counts = Counter()
     dept_stats = {}
-    # 各步骤人员列表（用于点击查看）；高管不计入绩效统计，不进入人员列表
+    # 各步骤人员列表（用于点击查看）；负责范围内已不含「特殊判断」高管
     step_people = {"target_set": [], "self_done": [], "mgr_done": [], "dept_done": [], "vp_done": []}
     grade_people = {g: [] for g in GRADE_OPTIONS}
     for rec in report_records:
         f = rec.get("fields", {})
-        _skip_perf = _is_executive(rec)  # HRBP 高管不参与绩效统计
+        _skip_perf = False
         name = _extract_text(f.get("姓名"), "未知").strip()
         emp_id = _extract_text(f.get("工号") or f.get("员工工号"), "").strip()
         dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
@@ -2297,42 +2317,23 @@ def _render_hrbp_dashboard():
     report_sales_for_scope_quota = [r for r in report_records_for_scope_quota if _extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "否"]
     report_non_sales_for_scope_quota = [r for r in report_records_for_scope_quota if _extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "是"]
     has_bonus_no = len(report_sales) > 0 and len(report_non_sales) > 0
-    # 部门绩效详情：不受筛选影响，始终展示负责范围全量；高管单列（绩效用「-」），各部门不含高管
-    exec_stats_for_detail, dept_stats_for_detail = _build_detail_stats(report_records_for_hrbp_kpi, exclude_exec_from_dept=True)
-    # HRBP：按分管高管分组部门；高管按本人姓名统计（仅 特殊判断=高管）
+    # 部门绩效详情：负责范围全量（已不含「特殊判断」高管）；按部门与分管高管分组，无高管单列
+    _, dept_stats_for_detail = _build_detail_stats(report_records_for_hrbp_kpi, exclude_exec_from_dept=False)
     vp_to_depts = {}
-    exec_by_name = {}  # 按高管本人姓名
-    exec_to_vps = {}   # exec_name -> set(vps) 用于按 VP 分组展示
-
-    def _fresh_hrbp_detail():
-        return {"total": 0, "done": 0, "grades": {g: 0 for g in GRADE_OPTIONS}, "sales_total": 0, "sales_done": 0, "sales_grades": {g: 0 for g in GRADE_OPTIONS}, "non_sales_total": 0, "non_sales_done": 0, "non_sales_grades": {g: 0 for g in GRADE_OPTIONS}, "mask_perf": False}
     for rec in report_records_for_hrbp_kpi:
         f = rec.get("fields", {})
         vp_str = _extract_text(f.get("分管高管") or f.get("高管"), "").strip()
         vps = [vp.strip() for vp in vp_str.replace("，", ",").split(",") if vp.strip()]
-        mgr_done = _extract_text(f.get("上级评价是否完成"), "").strip() == "是"
-        final_grade = _extract_text(f.get("最终绩效结果") or f.get("最终考核结果"), "").strip()
-        if final_grade not in GRADE_OPTIONS:
-            final_grade = "-"
-        is_sales = _extract_text(f.get("是否绩效关联奖金"), "").strip() == "否"
-        if _is_executive(rec):
-            exec_name = _extract_text(f.get("姓名"), "").strip() or "未知"
-            t = exec_by_name.setdefault(exec_name, _fresh_hrbp_detail())
-            t["mask_perf"] = True  # HRBP 高管绩效用「-」显示
-            exec_to_vps.setdefault(exec_name, set()).update(vps)
-            t["total"] += 1
-            # 不累计 done/grades，展示时用「-」
-        else:
-            for vp in vps:
-                dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
-                vp_to_depts.setdefault(vp, set()).add(dept_l1)
+        for vp in vps:
+            dept_l1 = _clean_dept_name(f.get("一级部门")) or "未分配部门"
+            vp_to_depts.setdefault(vp, set()).add(dept_l1)
     report_scope = report_sales if report_sales else report_records
     if has_bonus_no:
         if "hrbp_report_bonus_scope_filter" not in st.session_state:
             st.session_state.hrbp_report_bonus_scope_filter = "全部"
         _sk = st.session_state.hrbp_report_bonus_scope_filter
         report_scope = report_records if _sk == "全部" else (report_sales if _sk == "销售" else report_non_sales)
-    _scope_excl_exec = [r for r in (report_scope or report_records) if not _is_executive(r)]  # 高管不参与绩效统计
+    _scope_excl_exec = list(report_scope or report_records)
     base_cnt = len(_scope_excl_exec) if _scope_excl_exec else total_cnt
     scope_done = sum(1 for r in _scope_excl_exec if _extract_text(r.get("fields", {}).get("上级评价是否完成"), "").strip() == "是")
     completion_rate = 0 if base_cnt == 0 else round(scope_done / base_cnt * 100, 1)
@@ -2413,7 +2414,7 @@ def _render_hrbp_dashboard():
     # 主体内容（居中对齐）
     st.markdown("<div class='hrbp-view-container'></div>", unsafe_allow_html=True)
     st.markdown("<div class='module-title'>📊 HRBP 绩效概览</div>", unsafe_allow_html=True)
-    # KPI：考核总人数含高管；已完成评价/总体完成率/剩余未评排除高管（高管绩效用「-」显示）
+    # KPI：考核总人数不含「特殊判断」高管；其余指标口径与此一致
     hrbp_kpi_total = len(report_records_for_hrbp_kpi)
     hrbp_kpi_done = 0
     for r in _hrbp_excl_exec_for_kpi:
@@ -2426,17 +2427,17 @@ def _render_hrbp_dashboard():
                 if cand in GRADE_OPTIONS:
                     hrbp_kpi_done += 1
                     break
-    _hrbp_kpi_denom = len(_hrbp_excl_exec_for_kpi)  # 完成率分母排除高管
+    _hrbp_kpi_denom = len(_hrbp_excl_exec_for_kpi)
     hrbp_kpi_rate = round(hrbp_kpi_done / _hrbp_kpi_denom * 100, 1) if _hrbp_kpi_denom else 0
     hrbp_kpi_remaining = _hrbp_kpi_denom - hrbp_kpi_done
     _hrbp_kpi_html = f"""
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:12px;">
-        <div style="flex:1;min-width:120px;text-align:center;padding:16px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08);" title="此为绩效考核总数，包含分管高管、一级部门负责人">
-            <div class="report-kpi-label" title="此为绩效考核总数，包含分管高管、一级部门负责人" style="cursor:help;white-space:nowrap;">考核总人数 ⓘ</div>
+        <div style="flex:1;min-width:120px;text-align:center;padding:16px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08);" title="此为绩效考核总数，包含一级部门负责人，但不包含分管高管（「特殊判断」为高管的人员不参与统计）">
+            <div class="report-kpi-label" title="此为绩效考核总数，包含一级部门负责人，但不包含分管高管（「特殊判断」为高管的人员不参与统计）" style="cursor:help;white-space:nowrap;">考核总人数 ⓘ</div>
             <div style="font-size:32px;font-weight:700;color:#42A5F5;margin-top:8px;">{hrbp_kpi_total}</div>
         </div>
-        <div style="flex:1;min-width:120px;text-align:center;padding:16px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08);" title="最终考核结果不为空">
-            <div class="report-kpi-label" style="cursor:help;white-space:nowrap;">已完成评价 ⓘ</div>
+        <div style="flex:1;min-width:120px;text-align:center;padding:16px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08);" title="对应「最终考核结果」不为空，也就是说「已完成本次绩效考核」">
+            <div class="report-kpi-label" title="对应「最终考核结果」不为空，也就是说「已完成本次绩效考核」" style="cursor:help;white-space:nowrap;">已完成评价 ⓘ</div>
             <div style="font-size:32px;font-weight:700;color:#26A69A;margin-top:8px;">{hrbp_kpi_done}</div>
         </div>
         <div style="flex:1;min-width:120px;text-align:center;padding:16px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08);">
@@ -2695,7 +2696,7 @@ def _render_hrbp_dashboard():
         report_records if st.session_state.get("hrbp_report_bonus_scope_filter", "全部") == "全部"
         else (report_sales if st.session_state.hrbp_report_bonus_scope_filter == "销售" else report_non_sales)
     )
-    # 负责范围总体：仅随分管高管变，不随一级部门变（用 scope 数据）；配额实际人数排除高管
+    # 负责范围总体：仅随分管高管变，不随一级部门变（用 scope 数据）；与列表一致已不含「特殊判断」高管
     _hrbp_recs_quota_scope = report_records_for_scope_quota if not has_bonus_no else (
         report_records_for_scope_quota if st.session_state.get("hrbp_report_bonus_scope_filter", "全部") == "全部"
         else (report_sales_for_scope_quota if st.session_state.hrbp_report_bonus_scope_filter == "销售" else report_non_sales_for_scope_quota)
@@ -2740,7 +2741,7 @@ def _render_hrbp_dashboard():
             "actual_c": ac.get("actual_c", 0),
             "actual_sum": ac.get("actual_sum", 0),
         }
-    # 各部门配额：排除一级部门负责人（不能调整自己）、排除高管（绩效用「-」显示）
+    # 各部门配额：排除一级部门负责人（不能调整自己）；负责范围数据已不含「特殊判断」高管
     _hrbp_recs_quota_excl = [r for r in _hrbp_recs_quota if not _is_dept_head(r) and not _is_executive(r)]
     _hrbp_recs_actual_excl = [r for r in _hrbp_recs_actual if not _is_dept_head(r) and not _is_executive(r)]
     _hrbp_dept_quota_base = _hrbp_build_dept_grade_stats(_hrbp_recs_quota_excl, use_total_as_base=True)
@@ -2884,20 +2885,17 @@ def _render_hrbp_dashboard():
     dept_rows = []
     _indent_hrbp = "\u2003\u2003"
 
-    def _row(dept, scope, t, d, g, indent=0, mask_perf=False):
+    def _row(dept, scope, t, d, g, indent=0):
         disp_dept = (_indent_hrbp * indent) + dept if indent else dept
-        if mask_perf:
-            return {"部门": disp_dept, "口径": scope, "总人数": t, "已完成": "-", "完成率": "-", "S级": "-", "A级": "-", "B+级": "-", "B级": "-", "B-级": "-", "C级": "-"}
         rv = round(d / t * 100, 1) if t else 0
         return {"部门": disp_dept, "口径": scope, "总人数": t, "已完成": d, "完成率": "100%" if rv == 100 else f"{rv}%", "S级": g["S"], "A级": g["A"], "B+级": g["B+"], "B级": g["B"], "B-级": g["B-"], "C级": g["C"]}
-    exec_responsible = set(vp_to_depts.keys()) & set(exec_by_name.keys())
     _single_list_depts_hrbp = {"人力资源部", "战略发展部"}
     _dept_to_vps_hrbp = {}
     for vp, depts in vp_to_depts.items():
         for d in depts:
             if d in _single_list_depts_hrbp:
                 _dept_to_vps_hrbp.setdefault(d, set()).add(vp)
-    _dept_need_single_list_hrbp = {d for d in _single_list_depts_hrbp if d in _dept_to_vps_hrbp and not any(vp in exec_by_name for vp in _dept_to_vps_hrbp[d])}
+    _dept_need_single_list_hrbp = {d for d in _single_list_depts_hrbp if d in _dept_to_vps_hrbp}
     for d in sorted(_dept_need_single_list_hrbp):
         dv = dept_stats_for_detail.get(d, {})
         if not dv or dv.get("total", 0) == 0:
@@ -2907,65 +2905,20 @@ def _render_hrbp_dashboard():
             dept_rows.append(_row(d, "销售", dv["sales_total"], dv["sales_done"], dv.get("sales_grades", dv["grades"]), indent=1))
             dept_rows.append(_row(d, "非销售", dv["non_sales_total"], dv["non_sales_done"], dv.get("non_sales_grades", dv["grades"]), indent=1))
     for vp_name in sorted(vp_to_depts.keys()):
-        if vp_name in exec_by_name and vp_name in exec_responsible:
-            dval = exec_by_name[vp_name]
-            if dval["total"] > 0:
-                _m = dval.get("mask_perf", False)
-                dept_rows.append(_row(f"高管（{vp_name}）", "总", dval["total"], dval["done"], dval["grades"], indent=0, mask_perf=_m))
-                if (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0:
-                    dept_rows.append(_row(f"高管（{vp_name}）", "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"]), indent=1, mask_perf=_m))
-                    dept_rows.append(_row(f"高管（{vp_name}）", "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"]), indent=1, mask_perf=_m))
-        for exec_name in sorted(exec_by_name.keys()):
-            if exec_name == vp_name or exec_name in exec_responsible:
-                continue
-            if vp_name not in exec_to_vps.get(exec_name, set()):
-                continue
-            dval = exec_by_name[exec_name]
-            if dval["total"] > 0:
-                _m = dval.get("mask_perf", False)
-                dept_rows.append(_row(f"高管（{exec_name}）", "总", dval["total"], dval["done"], dval["grades"], indent=1, mask_perf=_m))
-                if (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0:
-                    dept_rows.append(_row(f"高管（{exec_name}）", "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"]), indent=2, mask_perf=_m))
-                    dept_rows.append(_row(f"高管（{exec_name}）", "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"]), indent=2, mask_perf=_m))
         for dept_name in sorted(vp_to_depts.get(vp_name, [])):
             if dept_name in _dept_need_single_list_hrbp:
                 continue
             dval = dept_stats_for_detail.get(dept_name, {})
             if not dval or dval.get("total", 0) == 0:
                 continue
-            dept_rows.append(_row(dept_name, "总", dval["total"], dval["done"], dval["grades"], indent=1))
+            dept_rows.append(_row(dept_name, "总", dval["total"], dval["done"], dval["grades"], indent=0))
             if (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0:
-                dept_rows.append(_row(dept_name, "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"]), indent=2))
-                dept_rows.append(_row(dept_name, "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"]), indent=2))
-    _hrbp_shown = set()
-    for row in dept_rows:
-        d = str(row.get("部门", ""))
-        if "高管（" in d and "）" in d:
-            beg = d.index("高管（") + 3
-            end = d.index("）", beg)
-            _hrbp_shown.add(d[beg:end].strip())
-    for exec_name in sorted(exec_by_name.keys()):
-        if exec_name in _hrbp_shown:
-            continue
-        dval = exec_by_name[exec_name]
-        if dval["total"] > 0:
-            _m = dval.get("mask_perf", False)
-            dept_rows.append(_row(f"高管（{exec_name}）", "总", dval["total"], dval["done"], dval["grades"], indent=0, mask_perf=_m))
-            if (dval.get("sales_total") or 0) > 0 and (dval.get("non_sales_total") or 0) > 0:
-                dept_rows.append(_row(f"高管（{exec_name}）", "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"]), indent=1, mask_perf=_m))
-                dept_rows.append(_row(f"高管（{exec_name}）", "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"]), indent=1, mask_perf=_m))
+                dept_rows.append(_row(dept_name, "销售", dval["sales_total"], dval["sales_done"], dval.get("sales_grades", dval["grades"]), indent=1))
+                dept_rows.append(_row(dept_name, "非销售", dval["non_sales_total"], dval["non_sales_done"], dval.get("non_sales_grades", dval["grades"]), indent=1))
     dept_df = pd.DataFrame(dept_rows)
     if not dept_df.empty:
         def _dept_row_style(row):
             scope = row.get("口径", "")
-            dept = str(row.get("部门", ""))
-            if "高管（" in dept:
-                if scope == "总":
-                    return ["font-weight: 700; font-size: 14px; background-color: rgba(255,193,7,0.12); color: #FFC107;"] * len(row)
-                if scope == "销售":
-                    return ["font-size: 12px; color: #81C784; background-color: rgba(255,193,7,0.06);"] * len(row)
-                if scope == "非销售":
-                    return ["font-size: 12px; color: #64B5F6; background-color: rgba(255,193,7,0.06);"] * len(row)
             if scope == "总":
                 return ["font-weight: 700; font-size: 14px; background-color: rgba(255,255,255,0.06);"] * len(row)
             if scope == "销售":
@@ -2975,22 +2928,25 @@ def _render_hrbp_dashboard():
             return [""] * len(row)
         dept_df = dept_df.style.set_properties(**{"text-align": "center"}).apply(_dept_row_style, axis=1)
     st.dataframe(dept_df, use_container_width=True, hide_index=True)
-    st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 提示：各部门含一级部门负责人，高管单列；如果一级部门负责人和高管为同一人，则一级部门中不含，高管单列。</div>", unsafe_allow_html=True)
+    st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 提示：各部门含一级部门负责人；「特殊判断」为高管的人员不在本页展示。</div>", unsafe_allow_html=True)
 
     st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
     st.markdown("<div class='module-title' style='text-align:center;'>📥 数据下载</div>", unsafe_allow_html=True)
-    _perf_cols = {"考核结果", "最终考核结果", "最终绩效结果", "上级评价是否完成", "分管高管调整考核结果", "一级部门调整考核结果"}
+    # 可选列：飞书表「全部字段」+ 记录中多出的字段（与多维表表头一致、可选列完整）
+    _all_keys_ordered = list(fetch_table_field_names_ordered(APP_TOKEN, TABLE_ID))
+    _seen_cols = set(_all_keys_ordered)
+    for rec in report_records:
+        for k in rec.get("fields", {}).keys():
+            if k not in _seen_cols:
+                _seen_cols.add(k)
+                _all_keys_ordered.append(k)
     _flat_rows = []
     for rec in report_records:
         f = rec.get("fields", {})
-        row = {k: _extract_text(v, "") for k, v in f.items()}
-        if _is_executive(rec):
-            for k in _perf_cols:
-                if k in row:
-                    row[k] = "-"
-        _flat_rows.append(row)
-    _download_df = pd.DataFrame(_flat_rows)
-    if not _download_df.empty:
+        base = {kk: _extract_text(vv, "") for kk, vv in f.items()}
+        _flat_rows.append({k: base.get(k, "") for k in _all_keys_ordered})
+    _download_df = pd.DataFrame(_flat_rows, columns=_all_keys_ordered) if _all_keys_ordered else pd.DataFrame()
+    if _all_keys_ordered:
         _all_cols = list(_download_df.columns)
         _sel_cols = st.multiselect("选择导出列", options=_all_cols, default=_all_cols, key="hrbp_download_col_sel")
         if not _sel_cols:
@@ -3023,6 +2979,36 @@ def fetch_table_field_names(app_token, table_id):
             name = str(item.get("field_name", "")).strip()
             if name:
                 field_names.add(name)
+        has_more = data.get("has_more", False)
+        page_token = data.get("page_token", "")
+    return field_names
+
+
+@st.cache_data(ttl=300)
+def fetch_table_field_names_ordered(app_token, table_id):
+    """多维表全部列名（与飞书表头一致，含未在记录中出现的空字段），顺序与接口返回一致。"""
+    tenant_token = get_tenant_token()
+    if not tenant_token:
+        return []
+    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields"
+    headers = {"Authorization": f"Bearer {tenant_token}"}
+    page_token = ""
+    has_more = True
+    field_names = []
+    seen = set()
+    while has_more:
+        params = {"page_size": 200}
+        if page_token:
+            params["page_token"] = page_token
+        res = _request_json_with_retry("GET", url, headers=headers, params=params)
+        if res.get("code") != 0:
+            break
+        data = res.get("data", {})
+        for item in data.get("items", []):
+            name = str(item.get("field_name", "")).strip()
+            if name and name not in seen:
+                seen.add(name)
+                field_names.append(name)
         has_more = data.get("has_more", False)
         page_token = data.get("page_token", "")
     return field_names
@@ -4153,6 +4139,14 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                             except: w = 0
                             st.session_state[f"obj_weight_{i}"] = w
                             st.session_state[f"obj_summary_{i}"] = fields.get(f"工作目标{i}及总结", "")
+                        for i in range(1, st.session_state.goal_count + 1):
+                            _wk = f"obj_weight_{i}"
+                            try:
+                                _ww = int(float(st.session_state.get(_wk, 0)))
+                            except Exception:
+                                _ww = 0
+                            if _ww < GOAL_WEIGHT_MIN_PCT:
+                                st.session_state[_wk] = GOAL_WEIGHT_MIN_PCT
                             
                             sc = fields.get(f"工作目标{i}自评得分", 0.0)
                             try: sc = float(sc)
@@ -4221,8 +4215,18 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
 
     # -- 本人自评算分验证逻辑 (前置计算) --
     target_weight = 60 if st.session_state.role == "管理者" else 80
+    # 旧会话或飞书 0% 数据：抬到单项下限，避免 number_input(min=5) 与状态冲突
+    for _gi in range(1, st.session_state.goal_count + 1):
+        _kw = f"obj_weight_{_gi}"
+        if _kw not in st.session_state:
+            continue
+        try:
+            _gw = int(float(st.session_state.get(_kw, 0)))
+        except Exception:
+            _gw = 0
+        if _gw < GOAL_WEIGHT_MIN_PCT:
+            st.session_state[_kw] = GOAL_WEIGHT_MIN_PCT
     total_weight = sum(st.session_state.get(f"obj_weight_{i}", 0) for i in range(1, st.session_state.goal_count + 1))
-    
     empty_summaries, too_short_summaries, too_long_summaries, unscored_goals = [], [], [], []
     for i in range(1, st.session_state.goal_count + 1):
         text_len = len(st.session_state.get(f"obj_summary_{i}", "").strip())
@@ -4238,7 +4242,8 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
         lead_text_len = len(st.session_state.get("lead_summary", "").strip())
         lead_empty, lead_too_short, lead_too_long, lead_unscored = (lead_text_len == 0), (0 < lead_text_len < 100), (lead_text_len > 5000), (st.session_state.get("lead_score", 0.0) == 0.0)
 
-    weight_valid = (total_weight == target_weight)
+    weight_sum_ok = total_weight == target_weight
+    weight_valid = weight_sum_ok
     summaries_valid = not (empty_summaries or too_short_summaries or too_long_summaries or comp_empty or comp_too_short or comp_too_long or lead_empty or lead_too_short or lead_too_long)
     scores_valid = not (unscored_goals or comp_unscored or lead_unscored)
     step1_can_submit = weight_valid and summaries_valid and scores_valid
@@ -4399,7 +4404,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
         if step1_can_submit:
             st.sidebar.success("✅ 您的所有自评项与权重已填写完整")
         else:
-            if not weight_valid: 
+            if not weight_valid:
                 st.sidebar.error(f"❌ 工作权重需为 {target_weight}%，当前: {total_weight}%")
                 
             if empty_summaries: st.sidebar.warning(f"⚠️ 目标未填内容: 目标 {', '.join(map(str, empty_summaries))}")
@@ -4559,7 +4564,9 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                 st.success("🔒 您的自评已提交，当前表单不可修改。")
             _self_no_edit = is_submitted or _self_edit_disabled
             st.markdown("<div class='module-title'>💼 工作模块</div>", unsafe_allow_html=True)
-            st.info(f"💡 提示：工作模块总体占比 {target_weight}% (各目标权重之和必须等于 {target_weight}%)")
+            st.info(
+                f"💡 提示：工作模块总体占比 {target_weight}%（各目标权重之和须等于 {target_weight}%；每项权重须≥{GOAL_WEIGHT_MIN_PCT}%，不可为 0%）"
+            )
             hint_placeholder = "如需更大操作区域，可拖动文本框右下角放大区域。"
             for i in range(1, st.session_state.goal_count + 1):
                 col_left, col_right = st.columns([3, 1])
@@ -4572,7 +4579,14 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                         placeholder=hint_placeholder,
                     )
                 with col_right:
-                    st.number_input(f"工作目标{i}权重(%)", min_value=0, max_value=100, step=5, disabled=_self_no_edit, key=f"obj_weight_{i}")
+                    st.number_input(
+                        f"工作目标{i}权重(%)",
+                        min_value=GOAL_WEIGHT_MIN_PCT,
+                        max_value=100,
+                        step=5,
+                        disabled=_self_no_edit,
+                        key=f"obj_weight_{i}",
+                    )
                     st.selectbox(f"工作目标{i}自评得分", options=SCORE_OPTIONS, disabled=_self_no_edit, key=f"obj_score_{i}")
                 st.markdown("---")
             if not _self_no_edit:
@@ -4590,7 +4604,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                             st.session_state.pop(f"obj_score_{st.session_state.goal_count}", None)
                             st.session_state.goal_count -= 1
                             st.rerun()
-            st.markdown("<div class='module-title'>🧠 能力模块</div>", unsafe_allow_html=True)
+            st.markdown("<div class='module-title'>⭐ 能力模块</div>", unsafe_allow_html=True)
             if st.session_state.role == "员工":
                 st.info("💡 提示：通用能力占比 20%")
                 col_comp_left, col_comp_right = st.columns([3, 1])
@@ -5047,14 +5061,14 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                         mgr_work_score = st.selectbox("🌟 工作目标整体上级评分", options=SCORE_OPTIONS, index=work_idx, key=f"mgr_work_score_{sub_id_str}", disabled=not is_direct_sub or is_mgr_submitted or _mgr_edit_disabled)
                         st.markdown("---")
 
-                        st.markdown("<div class='module-title'>🧠 通用能力模块展示与评分</div>", unsafe_allow_html=True)
+                        st.markdown("<div class='module-title'>⭐ 通用能力模块展示与评分</div>", unsafe_allow_html=True)
                         sub_comp_text = sub_f.get("通用能力总结", "未填写")
                         sub_comp_score = sub_f.get("通用能力自评得分", 0.0)
                         saved_comp_score = sub_f.get("通用能力上级评分", 0.0)
                         try: comp_idx = SCORE_OPTIONS.index(float(saved_comp_score))
                         except: comp_idx = 0
 
-                        st.markdown(f"**🧠 通用能力总结** <span style='font-size:14px; color:#888;'>(自评: {sub_comp_score}分)</span>", unsafe_allow_html=True)
+                        st.markdown(f"**⭐ 通用能力总结** <span style='font-size:14px; color:#888;'>(自评: {sub_comp_score}分)</span>", unsafe_allow_html=True)
                         st.text_area("隐藏标签", value=sub_comp_text, height=100, disabled=True, key=f"ui_sub_comp_{sub_id_str}", label_visibility="collapsed")
                         st.write("")
                         
@@ -5648,11 +5662,11 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                     _sc_str = str(_sc) if _sc is not None else "-"
                                     st.markdown(f"**🎯 工作目标{_gi}及总结** <span style='font-size:14px; color:#888;'>(权重: {_sw}% | 自评: {_sc_str}分)</span>", unsafe_allow_html=True)
                                     st.text_area("_", value=_obj, height=80, disabled=True, key=f"dept_view_obj_{_gi}_{_dept_view_id}", label_visibility="collapsed")
-                                st.markdown("<div class='module-title'>🧠 通用能力模块</div>", unsafe_allow_html=True)
+                                st.markdown("<div class='module-title'>⭐ 通用能力模块</div>", unsafe_allow_html=True)
                                 _comp = extract_text(_vf.get("通用能力总结"), "未填写").strip() or "未填写"
                                 _comp_sc = _vf.get("通用能力自评得分", 0.0)
                                 _comp_str = str(_comp_sc) if _comp_sc is not None else "-"
-                                st.markdown(f"**🧠 通用能力总结** <span style='font-size:14px; color:#888;'>(自评: {_comp_str}分)</span>", unsafe_allow_html=True)
+                                st.markdown(f"**⭐ 通用能力总结** <span style='font-size:14px; color:#888;'>(自评: {_comp_str}分)</span>", unsafe_allow_html=True)
                                 st.text_area("_", value=_comp, height=100, disabled=True, key=f"dept_view_comp_{_dept_view_id}", label_visibility="collapsed")
                                 _vrole = extract_text(_vf.get("角色", "")).strip()
                                 if _vrole == "管理者":
@@ -6173,11 +6187,11 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                     _sc_str = str(_sc) if _sc is not None else "-"
                                     st.markdown(f"**🎯 工作目标{_gi}及总结** <span style='font-size:14px; color:#888;'>(权重: {_sw}% | 自评: {_sc_str}分)</span>", unsafe_allow_html=True)
                                     st.text_area("_", value=_obj, height=80, disabled=True, key=f"vp_view_obj_{_gi}_{_vp_view_id}", label_visibility="collapsed")
-                                st.markdown("<div class='module-title'>🧠 通用能力模块</div>", unsafe_allow_html=True)
+                                st.markdown("<div class='module-title'>⭐ 通用能力模块</div>", unsafe_allow_html=True)
                                 _comp = extract_text(_vf.get("通用能力总结"), "未填写").strip() or "未填写"
                                 _comp_sc = _vf.get("通用能力自评得分", 0.0)
                                 _comp_str = str(_comp_sc) if _comp_sc is not None else "-"
-                                st.markdown(f"**🧠 通用能力总结** <span style='font-size:14px; color:#888;'>(自评: {_comp_str}分)</span>", unsafe_allow_html=True)
+                                st.markdown(f"**⭐ 通用能力总结** <span style='font-size:14px; color:#888;'>(自评: {_comp_str}分)</span>", unsafe_allow_html=True)
                                 st.text_area("_", value=_comp, height=100, disabled=True, key=f"vp_view_comp_{_vp_view_id}", label_visibility="collapsed")
                                 _vrole = extract_text(_vf.get("角色", "")).strip()
                                 if _vrole == "管理者":

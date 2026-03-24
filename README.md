@@ -8,7 +8,7 @@
 - **上级评分**：管理者对下属进行评分与考核评语
 - **综合调整**：一级部门负责人、分管高管对考核结果进行校准
 - **历史信息**：查看上一次绩效结果与评语
-- **演示入口**：支持三部门合并或单部门测试账号登录
+- **演示入口**：支持四部门合并或单部门测试账号登录
 - **扫码登录**：飞书 App 扫码授权（需 qrcode、pillow）
 - **制度学习**：侧边栏链接至绩效管理制度文档
 
@@ -61,18 +61,20 @@ APP_ENV=staging ENABLE_DEMO_LOGIN=true streamlit run new_app.py --server.port 85
 
 **演示入口 URL：**
 
-- **合并入口（三部门）**：http://localhost:8501/?demo_entry=1 或 ?demo_entry=1&demo_dept=all
+- **合并入口（四部门）**：http://localhost:8501/?demo_entry=1 或 ?demo_entry=1&demo_dept=all
 - 人力资源部：http://localhost:8501/?demo_entry=1&demo_dept=hr
 - 财富顾问部：http://localhost:8501/?demo_entry=1&demo_dept=wealth
 - 研发质量保障部：http://localhost:8501/?demo_entry=1&demo_dept=rd
+- 资产管理部：http://localhost:8501/?demo_entry=1&demo_dept=asset
 
 ### 5. 演示账号配置
 
-默认合并三部门：`demo_users.json`、`demo_users_hr.json`、`demo_users_wealth.json` 按顺序读取并去重。
+默认合并四部门：`demo_users.json`、`demo_users_hr.json`、`demo_users_wealth.json`、`demo_users_asset.json` 按顺序读取并去重。
 
 - 研发质量部：`demo_users.json`（参考 `demo_users.example.json`）
 - 人力资源部：`demo_users_hr.json`（参考 `demo_users_hr.example.json`）
 - 财富顾问部：`demo_users_wealth.json`（参考 `demo_users_wealth.example.json`）
+- 资产管理部：`demo_users_asset.json`（参考 `demo_users_asset.example.json`）
 
 从飞书拉取真实员工 open_id：
 
@@ -80,6 +82,7 @@ APP_ENV=staging ENABLE_DEMO_LOGIN=true streamlit run new_app.py --server.port 85
 python3 get_open_ids.py 人力资源部 > demo_users_hr.json
 python3 get_open_ids.py 财富顾问部 > demo_users_wealth.json
 python3 get_open_ids.py 研发质量保障部  # 输出到 demo_users.json
+python3 get_open_ids.py 资产管理部 > demo_users_asset.json
 python3 get_open_ids.py -l   # 列出所有一级部门
 ```
 
@@ -95,7 +98,8 @@ XQPS/
 │   └── secrets.toml       # 密钥配置（勿提交）
 ├── demo_users.json         # 研发质量部测试账号（勿提交）
 ├── demo_users_hr.json      # 人力资源部测试账号（勿提交）
-└── demo_users_wealth.json  # 财富顾问部测试账号（勿提交）
+├── demo_users_wealth.json  # 财富顾问部测试账号（勿提交）
+└── demo_users_asset.json   # 资产管理部测试账号（勿提交）
 ```
 
 ## 部署说明
