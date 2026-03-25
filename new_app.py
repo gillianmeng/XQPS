@@ -551,7 +551,7 @@ def _is_executive(rec):
     return v == "高管"
 
 
-# HRBP / HRBP Lead 报表导出：若某版含高管行，则高管仅保留下列字段、其余填「-」。当前导出已排除高管行，常量保留供对照与扩展。
+# HRBP 导出若需保留高管行时的字段白名单；当前 HRBP 导出已排除高管记录。
 HRBP_EXPORT_EXEC_KEEP_FIELDS = frozenset({
     "姓名", "工号", "员工工号",
     "岗位", "职位", "角色",
@@ -569,11 +569,10 @@ HRBP_EXPORT_EXEC_KEEP_FIELDS = frozenset({
 
 def _build_detail_stats(records, extract_text_fn=None, dept_key="一级部门", exclude_exec_from_dept=False):
     """
-    构建部门绩效详情统计：高管单列，各部门含一级部门负责人。
-    返回 (exec_stats, dept_stats)，dept_stats 的 key 为部门名。
-    dept_key: "一级部门" 或 "二级部门"（二级部门时若为空则退回到一级部门）
-    exclude_exec_from_dept: 为 True 时（HRBP 视图），高管不进入 dept_stats，也不进入 exec_stats（高管由 exec_by_name 单独展示）
-    exec_stats / dept_stats 结构: total, done, grades, sales_total, sales_done, sales_grades, non_sales_total, non_sales_done, non_sales_grades
+    构建部门绩效详情统计。返回 (exec_stats, dept_stats)，dept_stats 的 key 为部门名。
+    dept_key: 「一级部门」或「二级部门」（二级为空时退回一级）。
+    exclude_exec_from_dept: True 时跳过「特殊判断」高管，不进入部门汇总（与当前 HRBP 在入口已过滤高管二选一即可）。
+    管理员视图为 False：高管计入 exec_stats，部门行不含高管。
     """
     ex = extract_text_fn or _extract_text
 
@@ -590,7 +589,7 @@ def _build_detail_stats(records, extract_text_fn=None, dept_key="一级部门", 
         is_sales = ex(f.get("是否绩效关联奖金"), "").strip() == "否"
         is_exec = _is_executive(rec)
         if exclude_exec_from_dept and is_exec:
-            continue  # HRBP：高管不进入部门统计，由 exec_by_name 单独展示
+            continue
         if is_exec:
             t = exec_stats
         else:
@@ -2446,7 +2445,6 @@ def _render_hrbp_dashboard():
     _over_bp = actual_bp > bp_theory
     _over_sapb = actual_sapb > sapb_theory
 
-    # 侧边栏
     st.sidebar.markdown(f"### 👋 欢迎 {user_name}！")
     role_label = "**HRBP Lead**" if is_hrbp_lead else "**HRBP**"
     st.sidebar.markdown(role_label)
@@ -2476,10 +2474,8 @@ def _render_hrbp_dashboard():
         st.session_state.clear()
         st.rerun()
 
-    # 主体内容（居中对齐）
     st.markdown("<div class='hrbp-view-container'></div>", unsafe_allow_html=True)
     st.markdown("<div class='module-title'>📊 HRBP 绩效概览</div>", unsafe_allow_html=True)
-    # KPI：考核总人数不含「特殊判断」高管；其余指标口径与此一致
     hrbp_kpi_total = len(report_records_for_hrbp_kpi)
     hrbp_kpi_done = 0
     for r in _hrbp_excl_exec_for_kpi:
@@ -2517,7 +2513,6 @@ def _render_hrbp_dashboard():
     """
     st.markdown(_hrbp_kpi_html, unsafe_allow_html=True)
     st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
-    # 筛选框：与管理员一致（分管高管、一级部门、销售/非销售）
     st.markdown("<div class='module-title'>📋 各部门考核环节进度</div>", unsafe_allow_html=True)
     _hf1, _hf2, _hf3 = st.columns(3)
     with _hf1:
@@ -2554,7 +2549,6 @@ def _render_hrbp_dashboard():
             unsafe_allow_html=True,
         )
     st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
-    # 各步骤完成情况（可点击查看具体人员，只读）
     st.markdown("<p class='hrbp-left-label'><strong>各步骤完成情况</strong>（点击数字查看具体人员）</p>", unsafe_allow_html=True)
     k1, k2, k3, k4, k5 = st.columns(5)
     with k1:
@@ -2592,7 +2586,6 @@ def _render_hrbp_dashboard():
             st.session_state.pop("hrbp_clicked", None)
             st.rerun()
 
-    # 各部门考核环节进度表（筛选框已在上方）
     st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
     _hrbp_dept_stats_for_table = dept_stats
     if has_bonus_no and st.session_state.get("hrbp_report_bonus_scope_filter", "全部") != "全部":
@@ -3890,22 +3883,56 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
         color: #ffffff !important;
         border: 1px solid rgba(255,255,255,0.25) !important;
     }
-    /* 团队历史绩效「直属」按钮：蓝色 #4799e4，字体小两级 */
+    /* 团队历史绩效「直属」按钮：透明底、蓝色框线、小号加粗蓝字 */
     div.element-container:has(.history-direct-btn-marker) {
         display: none !important;
         margin: 0 !important;
         padding: 0 !important;
     }
+    div.element-container:has(.history-direct-btn-marker) + div.element-container {
+        overflow: visible !important;
+    }
     div.element-container:has(.history-direct-btn-marker) + div.element-container button {
-        background: #4799e4 !important;
-        color: #ffffff !important;
-        font-size: 11px !important;
-        font-weight: 500 !important;
-        min-height: 28px !important;
-        height: 28px !important;
-        padding: 4px 12px !important;
+        position: relative !important;
+        background: transparent !important;
+        color: #5ba3e8 !important;
+        font-size: 12px !important;
+        font-weight: 1000 !important;
+        min-height: 30px !important;
+        height: 30px !important;
+        padding: 5px 14px !important;
         border-radius: 8px !important;
-        border: none !important;
+        border: 1px solid #4799e4 !important;
+    }
+    div.element-container:has(.history-direct-btn-marker) + div.element-container button p,
+    div.element-container:has(.history-direct-btn-marker) + div.element-container button span {
+        font-size: 12px !important;
+        font-weight: 1000 !important;
+    }
+    div.element-container:has(.history-direct-btn-marker) + div.element-container button:hover,
+    div.element-container:has(.history-direct-btn-marker) + div.element-container button:focus {
+        background: transparent !important;
+        color: #7ab8f0 !important;
+        border-color: #5ba3e8 !important;
+    }
+    div.element-container:has(.history-direct-btn-marker) + div.element-container button:hover::after {
+        content: "二次点按可实现恢复默认全部下属";
+        position: absolute;
+        left: 50%;
+        bottom: calc(100% + 8px);
+        transform: translateX(-50%);
+        white-space: nowrap;
+        background: rgba(28, 36, 48, 0.96);
+        color: #e8edf5;
+        padding: 6px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        line-height: 1.35;
+        z-index: 99999;
+        pointer-events: none;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+        border: 1px solid rgba(255, 255, 255, 0.12);
     }
     .mgr-sub-list div.element-container:has(.xqps-btn-evaluate) + div.element-container button {
         background: #26A69A !important;
@@ -4078,21 +4105,22 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
     .dept-view-hint-2s {
         animation: dept-hint-fadeout 2.5s ease-in forwards;
     }
-    /* 一级部门负责人/分管高管调整：自评等级列🔗按钮缩小，边框透明，自评等级不断行 */
+    /* 一级部门负责人/分管高管调整：自评等级列🔗按钮略放大，浅色描边圆角 */
     button[class*="dept-view-self"],
     button[class*="dept_view_self"],
     button[class*="vp-view-self"],
     button[class*="vp_view_self"] {
-        min-width: 28px !important;
-        width: 28px !important;
-        min-height: 28px !important;
-        height: 28px !important;
+        min-width: 42px !important;
+        width: 42px !important;
+        min-height: 40px !important;
+        height: 40px !important;
         padding: 0 !important;
-        font-size: 12px !important;
-        background: transparent !important;
-        background-color: transparent !important;
-        border: none !important;
-        border-color: transparent !important;
+        font-size: 17px !important;
+        line-height: 1 !important;
+        border-radius: 8px !important;
+        border: 1px solid rgba(255, 255, 255, 0.28) !important;
+        background: rgba(255, 255, 255, 0.04) !important;
+        background-color: rgba(255, 255, 255, 0.04) !important;
         box-shadow: none !important;
     }
     </style>
@@ -5024,7 +5052,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                         dept_chain = build_dept_chain(sub_f) or normalize_dept_text(sub_f.get("一级部门")) or "未分配部门"
                         # 仅隔级上级/一级部门负责人/分管高管打标，普通管理者不打标
                         _need_rel_badge = is_vp or is_dept_head or (len(my_all_subs) > len(my_direct_subs))
-                        rel_badge = ("<span style='font-size:11px;color:#4CAF50;margin-left:4px;'>(直属)</span>" if is_direct else "<span style='font-size:11px;color:#888;margin-left:4px;'>(隔级)</span>") if _need_rel_badge else ""
+                        rel_badge = ("<span style='font-size:9px;font-weight:500;color:#5ba3e8;margin-left:4px;'>(直属)</span>" if is_direct else "<span style='font-size:11px;color:#888;margin-left:4px;'>(隔级)</span>") if _need_rel_badge else ""
                         c1, c2, c3, c4, c5, c6 = st.columns([2.2, 3.2, 1.2, 1.2, 1.2, 2.0], vertical_alignment="center")
                         c1.markdown(
                             f"<div class='sub-list-cell' style='color:#E0E0E0; white-space:normal;'><b>{s_name}</b>{rel_badge}<br>（{s_emp_id}）</div>",
@@ -5549,7 +5577,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                             rec_skip_level = extract_text(f.get("隔级上级"), "").strip()
                             is_direct = user_name and user_name in rec_manager
                             is_skip_level = user_name and user_name in rec_skip_level and not is_direct
-                            rel_badge = "<span style='font-size:11px;color:#4CAF50;margin-left:4px;'>(直属)</span>" if is_direct else ("<span style='font-size:11px;color:#888;margin-left:4px;'>(隔级)</span>" if is_skip_level else "")
+                            rel_badge = "<span style='font-size:9px;font-weight:500;color:#5ba3e8;margin-left:4px;'>(直属)</span>" if is_direct else ("<span style='font-size:11px;color:#888;margin-left:4px;'>(隔级)</span>" if is_skip_level else "")
 
                             self_grade = extract_text(f.get("自评等级", "-")).strip() or "-"
 
@@ -5582,7 +5610,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                             )
 
                             with c3:
-                                _gc3a, _gc3b = st.columns([2, 1], vertical_alignment="center")
+                                _gc3a, _gc3b = st.columns([1.75, 1.25], vertical_alignment="center")
                                 with _gc3a:
                                     st.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center; white-space:nowrap;'>{self_grade}</div>", unsafe_allow_html=True)
                                 with _gc3b:
@@ -6056,7 +6084,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                         rec_skip_level = extract_text(f.get("隔级上级"), "").strip()
                         is_direct = user_name and user_name in rec_manager
                         is_skip_level = user_name and user_name in rec_skip_level and not is_direct
-                        rel_badge = "<span style='font-size:11px;color:#4CAF50;margin-left:4px;'>(直属)</span>" if is_direct else ("<span style='font-size:11px;color:#888;margin-left:4px;'>(隔级)</span>" if is_skip_level else "")
+                        rel_badge = "<span style='font-size:9px;font-weight:500;color:#5ba3e8;margin-left:4px;'>(直属)</span>" if is_direct else ("<span style='font-size:11px;color:#888;margin-left:4px;'>(隔级)</span>" if is_skip_level else "")
 
                         self_grade = extract_text(f.get("自评等级", "-")).strip() or "-"
 
@@ -6107,7 +6135,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                         )
 
                         with c3:
-                            _vp_gc3a, _vp_gc3b = st.columns([2, 1], vertical_alignment="center")
+                            _vp_gc3a, _vp_gc3b = st.columns([1.75, 1.25], vertical_alignment="center")
                             with _vp_gc3a:
                                 st.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center; white-space:nowrap;'>{self_grade}</div>", unsafe_allow_html=True)
                             with _vp_gc3b:
@@ -6451,21 +6479,65 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                         if not (is_dept_head or is_vp):
                             # 简化版：非调整权限管理者
                             st.markdown("<div class='module-title'>🧭 绩效等级分布</div>", unsafe_allow_html=True)
-                            simple_grade_df = pd.DataFrame([{"等级": g, "人数": grade_counts.get(g, 0)} for g in ["S", "A", "B+", "B", "B-", "C"]])
+                            _grade_order = ["S", "A", "B+", "B", "B-", "C"]
+                            simple_grade_df = pd.DataFrame([{"grade": g, "cnt": grade_counts.get(g, 0)} for g in _grade_order])
                             _max_cnt = max(grade_counts.values(), default=0) if grade_counts else 0
                             _y_max = max(1, _max_cnt + 1)
                             _y_values = list(range(0, _y_max + 1))
-                            simple_grade_chart = (
+                            # Streamlit 默认 altair theme 会覆盖轴样式，深色下横轴刻度/文字常不可见；theme=None 使用 Vega 默认并自行配色。
+                            _g_axis = {
+                                "labelColor": "#E8EAED",
+                                "titleColor": "#CFD8DC",
+                                "tickColor": "#90A4AE",
+                                "domainColor": "#78909C",
+                            }
+                            # 横轴只保留刻度与轴线，等级文字仅在柱内展示（避免轴标签与 Streamlit 深色主题冲突）
+                            _g_x = alt.Axis(
+                                title="等级",
+                                labels=False,
+                                ticks=True,
+                                tickSize=5,
+                                domain=True,
+                                titlePadding=8,
+                            )
+                            _g_y = alt.Axis(format="d", values=_y_values, title="人数", titleAngle=-90, grid=True)
+                            _grade_bars = (
                                 alt.Chart(simple_grade_df)
                                 .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
                                 .encode(
-                                    x=alt.X("等级:N", sort=["S", "A", "B+", "B", "B-", "C"]),
-                                    y=alt.Y("人数:Q", scale=alt.Scale(domain=[0, _y_max]), axis=alt.Axis(format="d", values=_y_values, title="人数")),
-                                    tooltip=[alt.Tooltip("等级:N"), alt.Tooltip("人数:Q", format="d")],
-                                    color=alt.Color("等级:N", legend=None, scale=alt.Scale(domain=["S", "A", "B+", "B", "B-", "C"], range=GRADE_CHART_COLORS))
+                                    x=alt.X("grade:N", sort=_grade_order, scale=alt.Scale(domain=_grade_order), axis=_g_x),
+                                    y=alt.Y("cnt:Q", scale=alt.Scale(domain=[0, _y_max]), axis=_g_y),
+                                    tooltip=[
+                                        alt.Tooltip("grade:N", title="等级"),
+                                        alt.Tooltip("cnt:Q", title="人数", format="d"),
+                                    ],
+                                    color=alt.Color(
+                                        "grade:N",
+                                        legend=None,
+                                        scale=alt.Scale(domain=_grade_order, range=GRADE_CHART_COLORS),
+                                    ),
                                 )
                             )
-                            st.altair_chart(simple_grade_chart, use_container_width=True)
+                            _grade_bar_text = (
+                                alt.Chart(simple_grade_df)
+                                .transform_filter("datum.cnt > 0")
+                                .transform_calculate(y_mid="datum.cnt / 2")
+                                .mark_text(color="#FFFFFF", fontSize=13, align="center", baseline="middle")
+                                .encode(
+                                    x=alt.X("grade:N", sort=_grade_order, scale=alt.Scale(domain=_grade_order)),
+                                    y="y_mid:Q",
+                                    text=alt.Text("grade:N"),
+                                )
+                            )
+                            simple_grade_chart = (
+                                alt.layer(_grade_bars, _grade_bar_text)
+                                .resolve_scale(x="shared", y="shared")
+                                .configure_view(clip=False, strokeWidth=0)
+                                .configure_axisX(**_g_axis)
+                                .configure_axisY(gridColor="rgba(255,255,255,0.12)", **_g_axis)
+                                .properties(padding={"bottom": 40})
+                            )
+                            st.altair_chart(simple_grade_chart, use_container_width=True, theme=None)
 
                             st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
                             st.markdown("<div class='module-title'>📈 考核进度统计</div>", unsafe_allow_html=True)
@@ -6737,7 +6809,9 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                             </div>
                             """
                             st.markdown(table_html, unsafe_allow_html=True)
-                            st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 配额统计口径：负责范围总体配额中，不含分管高管（因为自己不能调整自己）。另，负责范围总体配额由于增加了一级部门负责人，总体额度会大于所有部门配额之和。</div>", unsafe_allow_html=True)
+                            # 仅分管高管显示该口径说明；一级部门负责人不展示（与自身角色无关易误解）
+                            if is_vp:
+                                st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 配额统计口径：负责范围总体配额中，不含分管高管（因为自己不能调整自己）。另，负责范围总体配额由于增加了一级部门负责人，总体额度会大于所有部门配额之和。</div>", unsafe_allow_html=True)
 
                             if is_vp and dept_grade_stats:
                                 st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
@@ -7229,16 +7303,19 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                             perf_cycle = extract_text(f.get("上一次绩效考核对应周期", "暂无"), "").strip() or "暂无"
                             last_result = extract_text(f.get("上一次绩效考核结果", "暂无"), "").strip() or "暂无"
                             res_color = _grade_colors.get(last_result, "#b7bdc8")
-                            # 直属打标：一级部门负责人/分管高管/隔级上级的直属显示绿色(直属)标识，隔级不标记
+                            # 直属打标：一级部门负责人/分管高管/隔级上级的直属显示小号蓝色(直属)标识，隔级不标记
                             rec_manager = extract_text(f.get("直接评价人") or f.get("评价人"), "").strip()
                             is_direct = user_name and user_name in rec_manager
                             name_display = f"<b>{name}</b>"
                             if (is_vp or is_dept_head or has_skip_level_subs) and is_direct:
-                                name_display += f" <span style='color:#4CAF50;'>(直属)</span>"
-                            name_display += f"（{emp}）"
+                                name_display += f" <span style='font-size:9px;font-weight:500;color:#5ba3e8;'>(直属)</span>"
+                            name_display += f"<br><span style='font-size:12px;color:#b0b0b0;font-weight:400;'>（{emp}）</span>"
 
                             c1, c2, c3, c4 = st.columns([1.8, 3.2, 2.0, 1.5], gap="small", vertical_alignment="center")
-                            c1.markdown(f"<div class='sub-list-cell' style='color:#E0E0E0; text-align:center;'>{name_display}</div>", unsafe_allow_html=True)
+                            c1.markdown(
+                                f"<div class='sub-list-cell sub-list-cell-multiline' style='color:#E0E0E0; white-space:normal; text-align:center;'>{name_display}</div>",
+                                unsafe_allow_html=True,
+                            )
                             c2.markdown(f"<div class='sub-list-cell sub-list-cell-multiline' style='color:#b0b0b0; text-align:center;' title='{dept_display} | {job}'>{dept_display}<br>{job}</div>", unsafe_allow_html=True)
                             c3.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center;'>{perf_cycle}</div>", unsafe_allow_html=True)
                             c4.markdown(f"<div class='sub-list-cell' style='color:{res_color}; text-align:center; font-weight:700;'>{last_result}</div>", unsafe_allow_html=True)

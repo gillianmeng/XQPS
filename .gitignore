@@ -32,3 +32,6 @@ xqps/
 
 # 管理员配置（运行时写入）
 admin_config.json
+
+# 本地打包产物（build.sh 生成）
+xqps.zip

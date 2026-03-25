@@ -91,8 +91,15 @@ python3 get_open_ids.py -l   # 列出所有一级部门
 ```
 XQPS/
 ├── new_app.py              # 主应用（含演示入口 ?demo_entry=1）
+├── frozen_announcements.json  # 公告内置快照（无 admin_config 时可回退）
 ├── get_open_ids.py        # 从飞书拉取员工 open_id 工具
 ├── run_demo.sh            # 演示环境启动脚本
+├── docs/
+│   ├── 交接与使用指南.md
+│   ├── 飞书表头与模块对应关系.md
+│   ├── 飞书多维表格迁移说明.md
+│   ├── 员工个人权限与设置.md
+│   └── 管理者权限与设置.md
 ├── requirements.txt
 ├── .streamlit/
 │   └── secrets.toml       # 密钥配置（勿提交）
@@ -102,7 +109,9 @@ XQPS/
 └── demo_users_asset.json   # 资产管理部测试账号（勿提交）
 ```
 
-## 部署说明
+## 部署与交接
+
+- 详细说明见 **[docs/交接与使用指南.md](docs/交接与使用指南.md)**（环境变量、管理员配置、权限迁移、并发与风险）。
 
 生产环境需配置：
 
