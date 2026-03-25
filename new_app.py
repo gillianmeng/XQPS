@@ -18,28 +18,26 @@ try:
 except ImportError:
     HAS_QRCODE = False
 
-# --- 配置区：严禁在代码中硬编码密钥 ---
-# 支持两种来源（优先级从高到低）：
-# 1) Streamlit secrets（推荐生产）：.streamlit/secrets.toml
-# 2) 系统环境变量（推荐容器/ECS）：export FEISHU_APP_ID=...
-
-def _get_config_value(key: str, env_key: str, default: str | None = None) -> str | None:
-    try:
-        if hasattr(st, "secrets") and key in st.secrets and st.secrets.get(key):
-            return str(st.secrets.get(key))
-    except Exception:
-        pass
-    return os.getenv(env_key, default)
-
-APP_ID = _get_config_value("FEISHU_APP_ID", "FEISHU_APP_ID")
-APP_SECRET = _get_config_value("FEISHU_APP_SECRET", "FEISHU_APP_SECRET")
-APP_TOKEN = _get_config_value("FEISHU_APP_TOKEN", "FEISHU_APP_TOKEN")
-TABLE_ID = _get_config_value("FEISHU_TABLE_ID", "FEISHU_TABLE_ID")
-REDIRECT_URI = _get_config_value("REDIRECT_URI", "REDIRECT_URI", "http://localhost:8501")
-APP_ENV = (_get_config_value("APP_ENV", "APP_ENV", "production") or "production").lower()
-IS_PROD = APP_ENV in ("prod", "production")
-ENABLE_DEMO_LOGIN = (_get_config_value("ENABLE_DEMO_LOGIN", "ENABLE_DEMO_LOGIN", "false") or "false").lower() == "true"
-ENABLE_DEV_TOOLS = (_get_config_value("ENABLE_DEV_TOOLS", "ENABLE_DEV_TOOLS", "false") or "false").lower() == "true"
+# --- 配置区：见 xqps_app/config.py（密钥仍来自 secrets / 环境变量）---
+from xqps_app.config import (
+    APP_ENV,
+    APP_ID,
+    APP_SECRET,
+    APP_TOKEN,
+    ENABLE_DEMO_LOGIN,
+    ENABLE_DEV_TOOLS,
+    IS_PROD,
+    REDIRECT_URI,
+    TABLE_ID,
+)
+from xqps_app.feishu_api import (
+    fetch_all_records_safely,
+    fetch_table_field_names,
+    fetch_table_field_names_ordered,
+    get_feishu_user,
+    get_record_by_openid_safely,
+    update_record_safely,
+)
 
 missing = [name for name, val in [("FEISHU_APP_ID", APP_ID), ("FEISHU_APP_SECRET", APP_SECRET), ("FEISHU_APP_TOKEN", APP_TOKEN), ("FEISHU_TABLE_ID", TABLE_ID)] if not val]
 if missing:
@@ -406,107 +404,6 @@ def _is_result_visible_for_user():
     if st.session_state.get("admin_role") == "admin":
         return True
     return _read_result_visible()
-
-# --- 飞书原生 API 安全接口 ---
-REQUEST_TIMEOUT_SEC = 12
-REQUEST_RETRY_TIMES = 2
-
-def _request_json_with_retry(method, url, headers=None, params=None, json_data=None):
-    last_err = None
-    for attempt in range(REQUEST_RETRY_TIMES + 1):
-        try:
-            resp = requests.request(
-                method=method,
-                url=url,
-                headers=headers,
-                params=params,
-                json=json_data,
-                timeout=REQUEST_TIMEOUT_SEC,
-            )
-            return resp.json()
-        except Exception as e:
-            last_err = e
-            if attempt < REQUEST_RETRY_TIMES:
-                time.sleep(0.35 * (attempt + 1))
-    return {"code": -1, "msg": f"请求失败：{last_err}"}
-
-@st.cache_data(ttl=300)
-def get_tenant_token():
-    token_url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
-    res = _request_json_with_retry(
-        "POST",
-        token_url,
-        json_data={"app_id": APP_ID, "app_secret": APP_SECRET},
-    )
-    return res.get("tenant_access_token")
-
-def get_feishu_user(code):
-    tenant_token = get_tenant_token()
-    if not tenant_token:
-        return None, "获取 Token 失败"
-    user_url = "https://open.feishu.cn/open-apis/authen/v1/access_token"
-    headers = {"Authorization": f"Bearer {tenant_token}"}
-    payload = {"grant_type": "authorization_code", "code": code}
-    res = _request_json_with_retry("POST", user_url, headers=headers, json_data=payload)
-    if res.get("code") == 0:
-        return res.get("data"), None
-    return None, res.get('msg')
-
-@st.cache_data(ttl=60)
-def fetch_all_records_safely(app_token, table_id):
-    tenant_token = get_tenant_token()
-    if not tenant_token:
-        return []
-    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records"
-    headers = {"Authorization": f"Bearer {tenant_token}"}
-    all_items = []
-    page_token = ""
-    has_more = True
-    while has_more:
-        params = {"page_size": 100}
-        if page_token:
-            params["page_token"] = page_token
-        res = _request_json_with_retry("GET", url, headers=headers, params=params)
-        if res.get("code") == 0:
-            data = res.get("data", {})
-            all_items.extend(data.get("items", []))
-            has_more = data.get("has_more", False)
-            page_token = data.get("page_token", "")
-        else:
-            break
-    return all_items
-
-def get_record_by_openid_safely(app_token, table_id, target_openid, fallback_name="", fallback_emp_id=""):
-    all_records = fetch_all_records_safely(app_token, table_id)
-    def _to_text(v):
-        if isinstance(v, list):
-            if v and isinstance(v[0], dict):
-                return str(v[0].get("name") or v[0].get("text") or "")
-            return str(v[0]) if v else ""
-        if isinstance(v, dict):
-            return str(v.get("name") or v.get("text") or "")
-        return str(v or "")
-    # 1) 优先按 open_id 命中
-    for record in all_records:
-        fields = record.get("fields", {})
-        value = fields.get("姓名")
-        if value is None:
-            continue
-        if isinstance(value, list) and len(value) > 0 and isinstance(value[0], dict) and value[0].get("id") == target_openid:
-            return record
-        elif isinstance(value, dict) and value.get("id") == target_openid:
-            return record
-    # 2) demo 场景兜底：按姓名 / 工号命中
-    fb_name = str(fallback_name or "").strip()
-    fb_emp = str(fallback_emp_id or "").strip()
-    if fb_name or fb_emp:
-        for record in all_records:
-            fields = record.get("fields", {})
-            rec_name = _to_text(fields.get("姓名")).strip()
-            rec_emp = _to_text(fields.get("工号") or fields.get("员工工号")).strip()
-            if (fb_name and rec_name == fb_name) or (fb_emp and rec_emp == fb_emp):
-                return record
-    return None
 
 def _extract_text(val, default="未获取"):
     """解析飞书多维表字段为文本（供登录等模块使用）"""
@@ -3014,84 +2911,6 @@ def _render_hrbp_dashboard():
         st.download_button("📥 下载 CSV", data=_csv_bytes, file_name=f"HRBP绩效_{current_cycle}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", mime="text/csv", key="hrbp_download_csv")
     else:
         st.caption("暂无数据可下载")
-
-@st.cache_data(ttl=300)
-def fetch_table_field_names(app_token, table_id):
-    tenant_token = get_tenant_token()
-    if not tenant_token:
-        return set()
-    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields"
-    headers = {"Authorization": f"Bearer {tenant_token}"}
-    page_token = ""
-    has_more = True
-    field_names = set()
-    while has_more:
-        params = {"page_size": 200}
-        if page_token:
-            params["page_token"] = page_token
-        res = _request_json_with_retry("GET", url, headers=headers, params=params)
-        if res.get("code") != 0:
-            break
-        data = res.get("data", {})
-        for item in data.get("items", []):
-            name = str(item.get("field_name", "")).strip()
-            if name:
-                field_names.add(name)
-        has_more = data.get("has_more", False)
-        page_token = data.get("page_token", "")
-    return field_names
-
-
-@st.cache_data(ttl=300)
-def fetch_table_field_names_ordered(app_token, table_id):
-    """多维表全部列名（与飞书表头一致，含未在记录中出现的空字段），顺序与接口返回一致。"""
-    tenant_token = get_tenant_token()
-    if not tenant_token:
-        return []
-    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields"
-    headers = {"Authorization": f"Bearer {tenant_token}"}
-    page_token = ""
-    has_more = True
-    field_names = []
-    seen = set()
-    while has_more:
-        params = {"page_size": 200}
-        if page_token:
-            params["page_token"] = page_token
-        res = _request_json_with_retry("GET", url, headers=headers, params=params)
-        if res.get("code") != 0:
-            break
-        data = res.get("data", {})
-        for item in data.get("items", []):
-            name = str(item.get("field_name", "")).strip()
-            if name and name not in seen:
-                seen.add(name)
-                field_names.append(name)
-        has_more = data.get("has_more", False)
-        page_token = data.get("page_token", "")
-    return field_names
-
-def update_record_safely(app_token, table_id, record_id, update_data):
-    tenant_token = get_tenant_token()
-    if not tenant_token:
-        return False, "获取 Token 失败"
-
-    valid_fields = fetch_table_field_names(app_token, table_id)
-    if valid_fields:
-        cleaned = {k: v for k, v in (update_data or {}).items() if k in valid_fields}
-        dropped = [k for k in (update_data or {}).keys() if k not in cleaned]
-        if dropped and not cleaned:
-            return False, f"字段不存在：{', '.join(dropped)}"
-        update_data = cleaned
-
-    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}"
-    headers = {"Authorization": f"Bearer {tenant_token}", "Content-Type": "application/json"}
-    payload = {"fields": update_data}
-    res = _request_json_with_retry("PUT", url, headers=headers, json_data=payload)
-    if res.get("code") == 0:
-        return True, "成功"
-    else:
-        return False, res.get("msg", str(res))
 
 def calculate_grade(score):
     if score == 0.0: return "-"
