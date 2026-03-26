@@ -4210,7 +4210,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
     # 4. 侧边栏渲染 (从上到下严格顺序)
     st.sidebar.markdown(f"### 👋 欢迎 {user_name}！")
     st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
-    st.sidebar.markdown("### 📅 绩效考核周期")
+    st.sidebar.markdown("### 📅 绩效信息")
     _cycle_disp = _normalize_cycle_display(current_cycle) or current_cycle
     st.sidebar.markdown(f"""
         <div style="background-color: rgba(38, 39, 48, 0.8); padding: 15px; border-radius: 8px; border: 1px solid #333;">
