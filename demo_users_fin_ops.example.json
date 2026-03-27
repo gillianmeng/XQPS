@@ -1,3 +1,20 @@
 {
-  "users": []
+  "users": [
+    {
+      "label": "示例员工（金融运营部·工号: XQFO001）",
+      "name": "示例员工",
+      "open_id": "ou_fin_ops_demo_1",
+      "emp_id": "XQFO001",
+      "job_title": "金融运营专员",
+      "role": "员工"
+    },
+    {
+      "label": "示例管理者（金融运营部·工号: XQFO002）",
+      "name": "示例管理者",
+      "open_id": "ou_fin_ops_demo_2",
+      "emp_id": "XQFO002",
+      "job_title": "金融运营部负责人",
+      "role": "管理者"
+    }
+  ]
 }

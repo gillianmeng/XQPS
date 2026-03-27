@@ -1,5 +1,13 @@
 # 更新日志
 
+## [v1.1.4] - 2026-03-24
+
+### 修复（演示）
+- **合并演示入口缺部门**：`demo_users_fin_product.example.json`、`demo_users_fin_ops.example.json` 此前为空的 `users`，在仅克隆仓库、未部署本地 `demo_users_fin_*.json` 时，合并入口无法出现金融产品与研究部、金融运营部账号。现已改为与 `demo_users_asset.example.json` 一致的占位示例（含部门与岗位说明）。
+- `demo_users_asset.example.json`：下拉标签中增加「资产管理部」字样，便于在合并入口中识别。
+
+---
+
 ## [v1.1.3] - 2026-03-24
 
 ### 新增（演示）
