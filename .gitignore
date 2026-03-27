@@ -26,6 +26,10 @@ demo_users_wealth.json
 !demo_users_wealth.example.json
 demo_users_asset.json
 !demo_users_asset.example.json
+demo_users_fin_product.json
+!demo_users_fin_product.example.json
+demo_users_fin_ops.json
+!demo_users_fin_ops.example.json
 
 # 克隆的公司仓库目录
 xqps/

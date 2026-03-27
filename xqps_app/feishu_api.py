@@ -32,7 +32,7 @@ def _request_json_with_retry(method, url, headers=None, params=None, json_data=N
     return {"code": -1, "msg": f"请求失败：{last_err}"}
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def get_tenant_token():
     token_url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
     res = _request_json_with_retry(
@@ -56,7 +56,10 @@ def get_feishu_user(code):
     return None, res.get("msg")
 
 
-@st.cache_data(ttl=90)
+@st.cache_data(
+    ttl=90,
+    show_spinner="🚀 全力加速中，请给我点鼓励ಥ_ಥ",
+)
 def fetch_all_records_safely(app_token, table_id):
     """全表记录（分页）。缓存 TTL 略短于 token，写操作后请在业务侧调用 .clear()。"""
     tenant_token = get_tenant_token()
@@ -115,7 +118,7 @@ def get_record_by_openid_safely(app_token, table_id, target_openid, fallback_nam
     return None
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_table_field_names(app_token, table_id):
     tenant_token = get_tenant_token()
     if not tenant_token:
@@ -142,7 +145,7 @@ def fetch_table_field_names(app_token, table_id):
     return field_names
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_table_field_names_ordered(app_token, table_id):
     """多维表全部列名（与飞书表头一致，含未在记录中出现的空字段），顺序与接口返回一致。"""
     tenant_token = get_tenant_token()

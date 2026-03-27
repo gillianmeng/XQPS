@@ -98,6 +98,25 @@ FROZEN_ANNOUNCEMENTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file_
 ANNOUNCE_LOCATIONS = ["员工自评", "上级评分", "一级部门负责人调整", "分管高管调整"]
 DOC_LINK_NAMES = ["雪球集团绩效管理制度", "雪球集团绩效管理实施细则", "绩效考核系统操作指引"]
 DEFAULT_DOC_LINK = "https://xueqiu.feishu.cn/wiki/RL1OwdkJ9iQnRakIcj6cXKRSnfg"  # 雪球集团绩效管理制度 默认
+CAPABILITY_REQUIREMENTS_URL = "https://xueqiu.feishu.cn/wiki/RqKEwGR5RiZzR8knlWucVl2ynTe"  # 雪球能力要求
+
+# Streamlit st.spinner / @st.cache_data 加载条：内层 flex 默认靠左，改为图标与文案整体居中（登录页与主应用均需注入）
+_SPINNER_LAYOUT_CSS_RULES = """
+    /* Streamlit Spinner：加载条内图标与文案整体居中 */
+    [data-testid="stSpinner"] > div {
+        justify-content: center !important;
+        align-items: center !important;
+        width: 100% !important;
+        flex-wrap: wrap !important;
+    }
+    [data-testid="stSpinner"] [data-testid="stMarkdownContainer"],
+    [data-testid="stSpinner"] .stMarkdown {
+        text-align: center !important;
+    }
+    [data-testid="stSpinner"] p {
+        text-align: center !important;
+    }
+"""
 
 # 考核周期等价与展示统一：「2026上半年」与「2026年上半年」视为同一周期，展示时统一为后者
 CYCLE_EQUIVALENTS = [("2026上半年", "2026年上半年")]
@@ -2174,6 +2193,21 @@ def _render_hrbp_dashboard():
     if total_cnt == 0:
         scope_hint = f"负责部门：{', '.join(scope_depts) if scope_depts else '未配置'}"
         st.info(f"💡 当前考核周期在您负责范围内暂无数据。{scope_hint}")
+        _hrbp_filter_active = (_sel_vp and _sel_vp != "全部") or (_sel_dept and _sel_dept != "全部部门")
+        if _hrbp_filter_active:
+            st.caption(
+                "若同时选择了「分管高管」与「一级部门」，二者需匹配（该高管名下须包含所选部门）；组合不兼容时会无数据。"
+            )
+            if st.button(
+                "↩ 返回概览（重置分管高管与一级部门为「全部」）",
+                type="primary",
+                key="hrbp_reset_filters_empty_state",
+            ):
+                st.session_state.hrbp_vp_filter = "全部"
+                st.session_state.hrbp_dept_filter = "全部部门"
+                if "hrbp_report_bonus_scope_filter" in st.session_state:
+                    st.session_state.hrbp_report_bonus_scope_filter = "全部"
+                st.rerun()
         st.sidebar.markdown(f"### 👋 欢迎 {user_name}！")
         st.sidebar.markdown("**HRBP Lead**" if is_hrbp_lead else "**HRBP**")
         st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
@@ -2365,7 +2399,8 @@ def _render_hrbp_dashboard():
             _doc_items.append(f'<div style="margin-bottom: 8px; padding: 6px 8px; border-radius: 4px; background: rgba(255,255,255,0.03);"><a href="{_url}" target="_blank" style="color: #b7bdc8;">{_dn}</a></div>')
         else:
             _doc_items.append(f'<div style="margin-bottom: 8px; padding: 6px 8px; color: #888;">{_dn}</div>')
-    st.sidebar.markdown(f"<div style='font-size: 11px;'>{''.join(_doc_items)}</div>", unsafe_allow_html=True)
+    _cap_req = f'<div style="margin-top: 8px; margin-bottom: 0; padding: 6px 8px; border-radius: 4px; background: rgba(255,255,255,0.03);"><a href="{CAPABILITY_REQUIREMENTS_URL}" target="_blank" style="color: #b7bdc8;">雪球能力要求</a></div>'
+    st.sidebar.markdown(f"<div style='font-size: 11px;'>{''.join(_doc_items)}{_cap_req}</div>", unsafe_allow_html=True)
     st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
     if st.sidebar.button("🚪 退出登录", use_container_width=True):
         st.session_state.clear()
@@ -2945,19 +2980,23 @@ def _load_demo_users_from_files(candidate_files):
 def load_demo_users(demo_dept=None):
     """
     读取本地 demo 用户配置。
-    demo_dept: None 或 "all" -> 合并四个部门（人力资源部、研发质量保障部、财富顾问部、资产管理部）
+    demo_dept: None 或 "all" -> 合并各部门（人力资源部、研发质量保障部、财富顾问部、资产管理部、金融产品与研究部、金融运营部）
     demo_dept: "hr" -> 人力资源部 (demo_users_hr.json)
     demo_dept: "wealth" -> 财富顾问部 (demo_users_wealth.json)
     demo_dept: "rd" -> 研发质量保障部 (demo_users.json)
     demo_dept: "asset" -> 资产管理部 (demo_users_asset.json)
+    demo_dept: "fin_product" -> 金融产品与研究部 (demo_users_fin_product.json)
+    demo_dept: "fin_ops" -> 金融运营部 (demo_users_fin_ops.json)
     """
     if demo_dept in (None, "", "all"):
-        # 合并四个部门：依次读取，按 open_id 去重
+        # 合并各部门：依次读取，按 open_id 去重
         file_sets = [
             ["demo_users_hr.json", "demo_users_hr.example.json"],
             ["demo_users_wealth.json", "demo_users_wealth.example.json"],
             ["demo_users.json", "demo_users.example.json"],
             ["demo_users_asset.json", "demo_users_asset.example.json"],
+            ["demo_users_fin_product.json", "demo_users_fin_product.example.json"],
+            ["demo_users_fin_ops.json", "demo_users_fin_ops.example.json"],
         ]
         seen_open_ids = set()
         raw_users = []
@@ -2975,6 +3014,10 @@ def load_demo_users(demo_dept=None):
             candidate_files = ["demo_users_wealth.json", "demo_users_wealth.example.json"]
         elif demo_dept == "asset":
             candidate_files = ["demo_users_asset.json", "demo_users_asset.example.json"]
+        elif demo_dept == "fin_product":
+            candidate_files = ["demo_users_fin_product.json", "demo_users_fin_product.example.json"]
+        elif demo_dept == "fin_ops":
+            candidate_files = ["demo_users_fin_ops.json", "demo_users_fin_ops.example.json"]
         else:
             candidate_files = ["demo_users.json", "demo_users.example.json"]
         raw_users = _load_demo_users_from_files(candidate_files)
@@ -3005,7 +3048,8 @@ def load_demo_users(demo_dept=None):
 
 # --- 登录页面逻辑 ---
 def login_page():
-    demo_dept = st.query_params.get("demo_dept", "").strip() or None  # "hr"=人力资源部
+    st.markdown("<style>" + _SPINNER_LAYOUT_CSS_RULES + "</style>", unsafe_allow_html=True)
+    demo_dept = st.query_params.get("demo_dept", "").strip() or None  # hr / wealth / rd / asset / fin_product / fin_ops
     is_demo_entry = st.query_params.get("demo_entry") == "1"
     show_demo_only = is_demo_entry and ENABLE_DEMO_LOGIN and not IS_PROD
     show_admin_entry = "admin_entry" in st.query_params and str(st.query_params.get("admin_entry", "")).strip() in ("1", "true", "yes")
@@ -3020,9 +3064,16 @@ def login_page():
 
     if show_demo_only:
         dept_label = (
-            "人力资源部、研发质量保障部、财富顾问部、资产管理部"
+            "人力资源部、研发质量保障部、财富顾问部、资产管理部、金融产品与研究部、金融运营部"
             if demo_dept in (None, "", "all")
-            else {"hr": "人力资源部", "wealth": "财富顾问部", "rd": "研发质量保障部", "asset": "资产管理部"}.get(demo_dept, "研发质量保障部")
+            else {
+                "hr": "人力资源部",
+                "wealth": "财富顾问部",
+                "rd": "研发质量保障部",
+                "asset": "资产管理部",
+                "fin_product": "金融产品与研究部",
+                "fin_ops": "金融运营部",
+            }.get(demo_dept, "研发质量保障部")
         )
         st.markdown("### 🎬 演示测试入口")
         st.caption(f"选择真实员工账号进行演示登录（{dept_label}）")
@@ -3031,7 +3082,7 @@ def login_page():
     if "code" in st.query_params and not show_demo_only:
         code = st.query_params["code"]
         oauth_state = st.query_params.get("state", "testing")
-        with st.spinner("正在验证飞书身份..."):
+        with st.spinner("🚀 全力加速中，请给我点鼓励ಥ_ಥ"):
             user_data, error_msg = get_feishu_user(code)
             if user_data:
                 user_name = user_data.get("name", "")
@@ -3220,13 +3271,17 @@ def login_page():
 
         if not demo_users:
             if demo_dept in (None, "", "all"):
-                st.info("💡 提示：未读取到任一 demo 用户文件。可运行 `python3 get_open_ids.py 人力资源部`、`python3 get_open_ids.py 研发质量保障部`、`python3 get_open_ids.py 财富顾问部`、`python3 get_open_ids.py 资产管理部` 分别生成对应 JSON。")
+                st.info("💡 提示：未读取到任一 demo 用户文件。可运行 `python3 get_open_ids.py <一级部门名>` 生成（如 人力资源部、研发质量保障部、财富顾问部、资产管理部、金融产品与研究部、金融运营部）。")
             elif demo_dept == "hr":
                 st.info("💡 提示：未读取到 demo_users_hr.json，可运行 `python3 get_open_ids.py 人力资源部` 生成。")
             elif demo_dept == "wealth":
                 st.info("💡 提示：未读取到 demo_users_wealth.json，可运行 `python3 get_open_ids.py 财富顾问部` 生成。")
             elif demo_dept == "asset":
                 st.info("💡 提示：未读取到 demo_users_asset.json，可运行 `python3 get_open_ids.py 资产管理部 > demo_users_asset.json` 生成。")
+            elif demo_dept == "fin_product":
+                st.info("💡 提示：未读取到 demo_users_fin_product.json，可运行 `python3 get_open_ids.py 金融产品与研究部 > demo_users_fin_product.json` 生成。")
+            elif demo_dept == "fin_ops":
+                st.info("💡 提示：未读取到 demo_users_fin_ops.json，可运行 `python3 get_open_ids.py 金融运营部 > demo_users_fin_ops.json` 生成。")
             else:
                 st.info("💡 提示：未读取到 demo_users.json，可参考 demo_users.example.json 创建本地测试账号。")
         if show_demo_only:
@@ -3241,6 +3296,7 @@ def return_to_self():
 
 # --- 主应用逻辑 ---
 def main_app():  # pyright: ignore[reportGeneralTypeIssues]
+    st.markdown("<style>" + _SPINNER_LAYOUT_CSS_RULES + "</style>", unsafe_allow_html=True)
     # --- 注入自定义 CSS ---
     st.markdown("""
     <style>
@@ -3916,7 +3972,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
         transform: translateY(0) !important;
     }
     html { scroll-behavior: smooth !important; }
-    /* 一级部门负责人：点击🔗后的提示，2秒后淡出消失 */
+    /* 一级部门负责人：点击「查」后的提示，2秒后淡出消失 */
     @keyframes dept-hint-fadeout {
         0%, 80% { opacity: 1; max-height: 80px; }
         100% { opacity: 0; max-height: 0; overflow: hidden; padding: 0; margin: 0; }
@@ -3924,23 +3980,62 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
     .dept-view-hint-2s {
         animation: dept-hint-fadeout 2.5s ease-in forwards;
     }
-    /* 一级部门负责人/分管高管调整：自评等级列🔗按钮略放大，浅色描边圆角 */
-    button[class*="dept-view-self"],
-    button[class*="dept_view_self"],
-    button[class*="vp-view-self"],
-    button[class*="vp_view_self"] {
-        min-width: 42px !important;
-        width: 42px !important;
-        min-height: 40px !important;
-        height: 40px !important;
-        padding: 0 !important;
-        font-size: 17px !important;
-        line-height: 1 !important;
-        border-radius: 8px !important;
-        border: 1px solid rgba(255, 255, 255, 0.28) !important;
-        background: rgba(255, 255, 255, 0.04) !important;
-        background-color: rgba(255, 255, 255, 0.04) !important;
+    /* 自评等级列「查」：key→外层 div.st-key-…；secondary 边框重、内层会盖字号，故代码里用 type=tertiary，并用高优先级选择器 */
+    .stApp div[data-testid="stElementContainer"][class*="st-key-dept_view_self"] button[data-testid^="stBaseButton"],
+    .stApp div[data-testid="stElementContainer"][class*="st-key-vp_view_self"] button[data-testid^="stBaseButton"],
+    [class*="st-key-dept_view_self"] button[data-testid^="stBaseButton"],
+    [class*="st-key-vp_view_self"] button[data-testid^="stBaseButton"] {
+        min-width: auto !important;
+        width: auto !important;
+        min-height: 0 !important;
+        height: auto !important;
+        padding: 0 1px !important;
+        margin: 0 !important;
+        line-height: 1.2 !important;
+        border: none !important;
+        border-radius: 2px !important;
+        background: transparent !important;
+        background-color: transparent !important;
         box-shadow: none !important;
+        font-size: 9px !important;
+        font-weight: 500 !important;
+        color: #FFEB3B !important;
+    }
+    .stApp div[data-testid="stElementContainer"][class*="st-key-dept_view_self"] button[data-testid^="stBaseButton"] p,
+    .stApp div[data-testid="stElementContainer"][class*="st-key-dept_view_self"] button[data-testid^="stBaseButton"] span,
+    .stApp div[data-testid="stElementContainer"][class*="st-key-vp_view_self"] button[data-testid^="stBaseButton"] p,
+    .stApp div[data-testid="stElementContainer"][class*="st-key-vp_view_self"] button[data-testid^="stBaseButton"] span,
+    [class*="st-key-dept_view_self"] button p,
+    [class*="st-key-dept_view_self"] button span,
+    [class*="st-key-vp_view_self"] button p,
+    [class*="st-key-vp_view_self"] button span {
+        color: #FFEB3B !important;
+        font-size: 9px !important;
+        line-height: 1.2 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    .stApp div[data-testid="stElementContainer"][class*="st-key-dept_view_self"] button[data-testid^="stBaseButton"]:hover,
+    .stApp div[data-testid="stElementContainer"][class*="st-key-vp_view_self"] button[data-testid^="stBaseButton"]:hover,
+    [class*="st-key-dept_view_self"] button[data-testid^="stBaseButton"]:hover,
+    [class*="st-key-vp_view_self"] button[data-testid^="stBaseButton"]:hover {
+        color: #FFF59D !important;
+        background: transparent !important;
+        border: none !important;
+        text-decoration: underline !important;
+    }
+    .stApp div[data-testid="stElementContainer"][class*="st-key-dept_view_self"] button[data-testid^="stBaseButton"]:hover p,
+    .stApp div[data-testid="stElementContainer"][class*="st-key-vp_view_self"] button[data-testid^="stBaseButton"]:hover p,
+    [class*="st-key-dept_view_self"] button:hover p,
+    [class*="st-key-vp_view_self"] button:hover p {
+        color: #FFF59D !important;
+    }
+    .stApp div[data-testid="stElementContainer"][class*="st-key-dept_view_self"] button[data-testid^="stBaseButton"]:focus-visible,
+    .stApp div[data-testid="stElementContainer"][class*="st-key-vp_view_self"] button[data-testid^="stBaseButton"]:focus-visible,
+    [class*="st-key-dept_view_self"] button[data-testid^="stBaseButton"]:focus-visible,
+    [class*="st-key-vp_view_self"] button[data-testid^="stBaseButton"]:focus-visible {
+        outline: 1px solid rgba(255, 235, 59, 0.75) !important;
+        outline-offset: 2px !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -4022,7 +4117,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
 
     # 1. 登录与获取飞书档案
     if not st.session_state.feishu_record_id and st.session_state.feishu_record_id != "NOT_FOUND":
-        with st.spinner("正在同步您的飞书档案数据..."):
+        with st.spinner("🚀 全力加速中，正在同步飞书档案…"):
             current_open_id = st.session_state.user_info.get("open_id") or st.session_state.user_info.get("id")
             try:
                 record = get_record_by_openid_safely(
@@ -4301,13 +4396,13 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                 if step2_can_submit:
                     st.sidebar.success("✅ 该下属所有评分项与评语已填写完整")
                 else:
-                    if mgr_work_unscored: st.sidebar.warning("⚠️ 工作目标整体未打分")
+                    if mgr_work_unscored: st.sidebar.warning("⚠️ 工作业绩整体未打分")
                     if mgr_comp_unscored: st.sidebar.warning("⚠️ 通用能力未打分")
-                    if mgr_lead_unscored: st.sidebar.warning("⚠️ 领导力模块未打分")
+                    if mgr_lead_unscored: st.sidebar.warning("⚠️ 管理目标未打分")
                     if mgr_comment_empty: st.sidebar.warning("⚠️ 考核评语未填写")
                     
                 if sub_weight_sum not in [60, 80]:
-                    st.sidebar.error(f"❌ 预警: 该下属设定的工作总权重为 {sub_weight_sum}%，不符合标准规范。")
+                    st.sidebar.error(f"❌ 预警: 该下属工作业绩目标权重合计为 {sub_weight_sum}%，不符合标准规范。")
                 st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
     else:
         # 【本人自评的验证模块与结果展示】
@@ -4317,18 +4412,18 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
             st.sidebar.success("✅ 您的所有自评项与权重已填写完整")
         else:
             if not weight_valid:
-                st.sidebar.error(f"❌ 工作权重需为 {target_weight}%，当前: {total_weight}%")
+                st.sidebar.error(f"❌ 工作业绩权重需为 {target_weight}%，当前: {total_weight}%")
                 
-            if empty_summaries: st.sidebar.warning(f"⚠️ 目标未填内容: 目标 {', '.join(map(str, empty_summaries))}")
+            if empty_summaries: st.sidebar.warning(f"⚠️ 工作业绩目标未填内容: {', '.join(map(str, empty_summaries))}")
             if comp_empty: st.sidebar.warning("⚠️ 通用能力未填内容")
-            if lead_empty: st.sidebar.warning("⚠️ 领导力未填内容")
-            if unscored_goals: st.sidebar.warning(f"⚠️ 目标未打分: 目标 {', '.join(map(str, unscored_goals))}")
+            if lead_empty: st.sidebar.warning("⚠️ 管理目标未填内容")
+            if unscored_goals: st.sidebar.warning(f"⚠️ 工作业绩目标未打分: {', '.join(map(str, unscored_goals))}")
             if comp_unscored: st.sidebar.warning("⚠️ 通用能力未打分")
-            if lead_unscored: st.sidebar.warning("⚠️ 领导力未打分")
-            if too_short_summaries: st.sidebar.warning(f"⚠️ 字数不足(≥100字): 目标 {', '.join(map(str, too_short_summaries))}")
-            if too_long_summaries: st.sidebar.error(f"❌ 字数超限: 目标 {', '.join(map(str, too_long_summaries))}")
+            if lead_unscored: st.sidebar.warning("⚠️ 管理目标未打分")
+            if too_short_summaries: st.sidebar.warning(f"⚠️ 字数不足(≥100字): 工作业绩目标 {', '.join(map(str, too_short_summaries))}")
+            if too_long_summaries: st.sidebar.error(f"❌ 字数超限: 工作业绩目标 {', '.join(map(str, too_long_summaries))}")
             if comp_too_short: st.sidebar.warning("⚠️ 通用能力总结字数不足(≥100字)")
-            if lead_too_short: st.sidebar.warning("⚠️ 领导力维度字数不足(≥100字)")
+            if lead_too_short: st.sidebar.warning("⚠️ 管理目标总结字数不足(≥100字)")
             
         st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
         
@@ -4403,10 +4498,10 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
             _doc_items.append(f'<div style="margin-bottom: 8px; padding: 6px 8px; border-radius: 4px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);"><a href="{_url}" target="_blank" style="color: #b7bdc8; text-decoration: none;">{_dn}</a></div>')
         else:
             _doc_items.append(f'<div style="margin-bottom: 8px; padding: 6px 8px; border-radius: 4px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); color: #888;">{_dn}</div>')
-    _doc_items[-1] = _doc_items[-1].replace("margin-bottom: 8px;", "margin-bottom: 0;")
+    _cap_req = f'<div style="margin-top: 8px; margin-bottom: 0; padding: 6px 8px; border-radius: 4px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);"><a href="{CAPABILITY_REQUIREMENTS_URL}" target="_blank" style="color: #b7bdc8; text-decoration: none;">雪球能力要求</a></div>'
     st.sidebar.markdown(f"""
     <div class="policy-learning-box" style="font-size: 11px;">
-        {''.join(_doc_items)}
+        {''.join(_doc_items)}{_cap_req}
     </div>
     """, unsafe_allow_html=True)
     st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
@@ -4475,16 +4570,16 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
             if is_submitted:
                 st.success("🔒 您的自评已提交，当前表单不可修改。")
             _self_no_edit = is_submitted or _self_edit_disabled
-            st.markdown("<div class='module-title'>💼 工作模块</div>", unsafe_allow_html=True)
+            st.markdown("<div class='module-title'>💼 工作业绩</div>", unsafe_allow_html=True)
             st.info(
-                f"💡 提示：工作模块总体占比 {target_weight}%（各目标权重之和须等于 {target_weight}%；每项权重须≥{GOAL_WEIGHT_MIN_PCT}%，不可为 0%）"
+                f"💡 提示：工作业绩总体占比 {target_weight}%（各工作业绩目标权重之和须等于 {target_weight}%；每项权重须≥{GOAL_WEIGHT_MIN_PCT}%，不可为 0%）"
             )
             hint_placeholder = "如需更大操作区域，可拖动文本框右下角放大区域。"
             for i in range(1, st.session_state.goal_count + 1):
                 col_left, col_right = st.columns([3, 1])
                 with col_left:
                     st.text_area(
-                        f"工作目标{i}及总结",
+                        f"工作业绩目标{i}及总结",
                         height=110,
                         disabled=_self_no_edit,
                         key=f"obj_summary_{i}",
@@ -4492,31 +4587,31 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                     )
                 with col_right:
                     st.number_input(
-                        f"工作目标{i}权重(%)",
+                        f"工作业绩目标{i}权重(%)",
                         min_value=GOAL_WEIGHT_MIN_PCT,
                         max_value=100,
                         step=5,
                         disabled=_self_no_edit,
                         key=f"obj_weight_{i}",
                     )
-                    st.selectbox(f"工作目标{i}自评得分", options=SCORE_OPTIONS, disabled=_self_no_edit, key=f"obj_score_{i}")
+                    st.selectbox(f"工作业绩目标{i}自评得分", options=SCORE_OPTIONS, disabled=_self_no_edit, key=f"obj_score_{i}")
                 st.markdown("---")
             if not _self_no_edit:
                 col_add, col_del = st.columns(2)
                 with col_add:
                     if st.session_state.goal_count < 5:
-                        if st.button("➕ 添加工作目标", use_container_width=True):
+                        if st.button("➕ 添加工作业绩目标", use_container_width=True):
                             st.session_state.goal_count += 1
                             st.rerun()
                 with col_del:
                     if st.session_state.goal_count > 3:
-                        if st.button("➖ 删除最后目标", use_container_width=True):
+                        if st.button("➖ 删除最后工作业绩目标", use_container_width=True):
                             st.session_state.pop(f"obj_summary_{st.session_state.goal_count}", None)
                             st.session_state.pop(f"obj_weight_{st.session_state.goal_count}", None)
                             st.session_state.pop(f"obj_score_{st.session_state.goal_count}", None)
                             st.session_state.goal_count -= 1
                             st.rerun()
-            st.markdown("<div class='module-title'>⭐ 能力模块</div>", unsafe_allow_html=True)
+            st.markdown("<div class='module-title'>⭐ 通用能力</div>", unsafe_allow_html=True)
             if st.session_state.role == "员工":
                 st.info("💡 提示：通用能力占比 20%")
                 col_comp_left, col_comp_right = st.columns([3, 1])
@@ -4530,7 +4625,16 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                     )
                 with col_comp_right: st.selectbox("通用能力自评得分", options=SCORE_OPTIONS, disabled=_self_no_edit, key="comp_score")
             elif st.session_state.role == "管理者":
-                st.info("💡 提示：通用能力占比 20%、领导力占比 20%")
+                st.info("💡 提示：管理目标占比 20%、通用能力占比 20%")
+                st.text_area(
+                    "管理目标总结",
+                    height=110,
+                    disabled=_self_no_edit,
+                    key="lead_summary",
+                    placeholder="结合考核期工作实际情况，从「领导力」维度总结",
+                )
+                st.selectbox("管理目标自评得分", options=SCORE_OPTIONS, disabled=_self_no_edit, key="lead_score")
+                st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
                 st.text_area(
                     "通用能力总结",
                     height=110,
@@ -4539,15 +4643,6 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                     placeholder="结合考核期工作实际情况，从「思考、行动、协作、成长」四个维度总结",
                 )
                 st.selectbox("通用能力自评得分", options=SCORE_OPTIONS, disabled=_self_no_edit, key="comp_score")
-                st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
-                st.text_area(
-                    "领导力总结",
-                    height=110,
-                    disabled=_self_no_edit,
-                    key="lead_summary",
-                    placeholder="请结合考核周期工作实际情况，从「领导力」维度进行阐述与总结",
-                )
-                st.selectbox("领导力自评得分", options=SCORE_OPTIONS, disabled=_self_no_edit, key="lead_score")
             if not _self_no_edit:
                 st.markdown("---")
                 col_submit, col_save = st.columns(2)
@@ -4922,10 +5017,11 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                         
                         col_head1, col_head2 = st.columns([3, 1])
                         with col_head1:
-                            st.markdown(f"<div class='module-title'>👤 被评价人：{disp_name}</div>", unsafe_allow_html=True)
+                            st.markdown("<div class='hero-title'>🎯 当前绩效目标设定与自评</div>", unsafe_allow_html=True)
                             st.markdown(
                                 f"""
                                 <div style='font-size:14px; color:#E0E0E0; margin-top:6px; line-height:1.6;'>
+                                    <div><b>被评价人：{disp_name}</b></div>
                                     <div>工号：{disp_emp_id}</div>
                                     <div>岗位：{disp_job}</div>
                                     <div>自评得分：{disp_score}</div>
@@ -4944,7 +5040,8 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                         st.write("")
                         
                         st.markdown("---")
-                        st.markdown("<div class='module-title'>💼 工作模块展示与评分</div>", unsafe_allow_html=True)
+                        st.markdown("<div class='module-title'>💼 工作业绩</div>", unsafe_allow_html=True)
+                        st.caption("💡 提示：请根据下属各条工作业绩目标及自评，在下方给出「工作业绩整体」上级评分。")
                         sub_weight_sum = 0
                         
                         sub_goal_count = 3
@@ -4960,7 +5057,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                             except: sub_weight = 0
                             raw_score = sub_f.get(f"工作目标{i}自评得分", 0.0)
 
-                            st.markdown(f"**🎯工作目标{i}及总结** <span style='font-size:14px; color:#888;'>(权重: {sub_weight}% | 自评: {raw_score}分)</span>", unsafe_allow_html=True)
+                            st.markdown(f"**工作业绩目标{i}及总结** <span style='font-size:14px; color:#888;'>(权重: {sub_weight}% | 自评: {raw_score}分)</span>", unsafe_allow_html=True)
                             st.text_area("隐藏标签", value=sub_obj_text, height=80, disabled=True, key=f"ui_sub_obj_{i}_{sub_id_str}", label_visibility="collapsed")
                             st.write("")
                             sub_weight_sum += sub_weight
@@ -4969,40 +5066,39 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                         try: work_idx = SCORE_OPTIONS.index(float(saved_work_score))
                         except: work_idx = 0
                         
-                        st.info(f"💡 提示：该下属工作目标总权重为 **{sub_weight_sum}%**")
-                        mgr_work_score = st.selectbox("🌟 工作目标整体上级评分", options=SCORE_OPTIONS, index=work_idx, key=f"mgr_work_score_{sub_id_str}", disabled=not is_direct_sub or is_mgr_submitted or _mgr_edit_disabled)
+                        st.info(f"💡 提示：该下属工作业绩目标权重合计为 **{sub_weight_sum}%**")
+                        mgr_work_score = st.selectbox("🌟 工作业绩整体上级评分", options=SCORE_OPTIONS, index=work_idx, key=f"mgr_work_score_{sub_id_str}", disabled=not is_direct_sub or is_mgr_submitted or _mgr_edit_disabled)
                         st.markdown("---")
 
-                        st.markdown("<div class='module-title'>⭐ 通用能力模块展示与评分</div>", unsafe_allow_html=True)
+                        sub_role = extract_text(sub_f.get("角色", "")).strip() 
+                        has_leadership = (sub_role == "管理者") 
+                        
                         sub_comp_text = sub_f.get("通用能力总结", "未填写")
                         sub_comp_score = sub_f.get("通用能力自评得分", 0.0)
                         saved_comp_score = sub_f.get("通用能力上级评分", 0.0)
                         try: comp_idx = SCORE_OPTIONS.index(float(saved_comp_score))
                         except: comp_idx = 0
 
-                        st.markdown(f"**⭐ 通用能力总结** <span style='font-size:14px; color:#888;'>(自评: {sub_comp_score}分)</span>", unsafe_allow_html=True)
-                        st.text_area("隐藏标签", value=sub_comp_text, height=100, disabled=True, key=f"ui_sub_comp_{sub_id_str}", label_visibility="collapsed")
-                        st.write("")
-                        
-                        mgr_comp_score = st.selectbox("🌟 通用能力上级评分", options=SCORE_OPTIONS, index=comp_idx, key=f"mgr_comp_score_{sub_id_str}", disabled=not is_direct_sub or is_mgr_submitted or _mgr_edit_disabled)
-                        
-                        sub_role = extract_text(sub_f.get("角色", "")).strip() 
-                        has_leadership = (sub_role == "管理者") 
-                        
                         mgr_lead_score = 0.0
+                        st.markdown("<div class='module-title'>⭐ 通用能力</div>", unsafe_allow_html=True)
+                        if not has_leadership:
+                            st.caption("💡 提示：通用能力占比 20%")
                         if has_leadership:
                             sub_lead_text = extract_text(sub_f.get("领导力总结", ""))
                             sub_lead_score = sub_f.get("领导力自评得分", 0.0)
                             saved_lead_score = sub_f.get("领导力上级评分", 0.0)
                             try: lead_idx = SCORE_OPTIONS.index(float(saved_lead_score))
                             except: lead_idx = 0
-                            
-                            st.markdown("<div class='module-title'>👑 领导力模块展示与评分</div>", unsafe_allow_html=True)
-                            st.markdown(f"**👑 领导力总结** <span style='font-size:14px; color:#888;'>(自评: {sub_lead_score}分)</span>", unsafe_allow_html=True)
+                            st.caption("💡 提示：管理目标占比 20%、通用能力占比 20%（与员工自评一致）")
+                            st.markdown(f"**管理目标总结** <span style='font-size:14px; color:#888;'>(自评: {sub_lead_score}分)</span>", unsafe_allow_html=True)
                             st.text_area("隐藏标签", value=sub_lead_text, height=100, disabled=True, key=f"ui_sub_lead_{sub_id_str}", label_visibility="collapsed")
                             st.write("")
-                            
-                            mgr_lead_score = st.selectbox("🌟 领导力上级评分", options=SCORE_OPTIONS, index=lead_idx, key=f"mgr_lead_score_{sub_id_str}", disabled=not is_direct_sub or is_mgr_submitted or _mgr_edit_disabled)
+                            mgr_lead_score = st.selectbox("🌟 管理目标上级评分", options=SCORE_OPTIONS, index=lead_idx, key=f"mgr_lead_score_{sub_id_str}", disabled=not is_direct_sub or is_mgr_submitted or _mgr_edit_disabled)
+                            st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
+                        st.markdown(f"**通用能力总结** <span style='font-size:14px; color:#888;'>(自评: {sub_comp_score}分)</span>", unsafe_allow_html=True)
+                        st.text_area("隐藏标签", value=sub_comp_text, height=100, disabled=True, key=f"ui_sub_comp_{sub_id_str}", label_visibility="collapsed")
+                        st.write("")
+                        mgr_comp_score = st.selectbox("🌟 通用能力上级评分", options=SCORE_OPTIONS, index=comp_idx, key=f"mgr_comp_score_{sub_id_str}", disabled=not is_direct_sub or is_mgr_submitted or _mgr_edit_disabled)
                         st.markdown("---")
                         comp_weight = 20 if has_leadership else (100 - sub_weight_sum)
                         lead_weight = 20 if has_leadership else 0
@@ -5018,11 +5114,21 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                             f"<div class='module-title'>📈 考核总得分预览：{current_total_score} 分 ｜ 绩效等级：{current_grade}</div>",
                             unsafe_allow_html=True,
                         )
-                        st.caption(f"(工作模块权重 {sub_weight_sum}%，能力模块权重 {comp_weight}%)")
+                        if has_leadership:
+                            st.caption(f"（工作业绩目标权重合计 {sub_weight_sum}%｜管理目标 {lead_weight}%｜通用能力 {comp_weight}%）")
+                        else:
+                            st.caption(f"（工作业绩目标权重合计 {sub_weight_sum}%｜通用能力 {comp_weight}%）")
                         
                         saved_comment_raw = extract_text(sub_f.get("考核评语", ""), "").strip()
                         saved_comment = saved_comment_raw if saved_comment_raw and saved_comment_raw not in ["未获取", "None", "0"] else ""
-                        st.text_area("✍️ 考核评语", value=saved_comment, height=100, placeholder="请输入对该下属的整体评价...", key=f"mgr_comment_{sub_id_str}", disabled=not is_direct_sub or is_mgr_submitted or _mgr_edit_disabled)
+                        st.text_area(
+                            "✍️ 考核评语",
+                            value=saved_comment,
+                            height=100,
+                            placeholder="请输入下属的整体评价：1、做得好的：请通过数据/具体行为/举例说明。2、待改进的：请通过数据/具体行为/举例说明。",
+                            key=f"mgr_comment_{sub_id_str}",
+                            disabled=not is_direct_sub or is_mgr_submitted or _mgr_edit_disabled,
+                        )
                         
                         sub_update_data = {
                             "考核得分": current_total_score,
@@ -5048,8 +5154,8 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                         if st.session_state.pop("mgr_draft_saved", False):
                             st.success("💡 提示：已妥善保存。")
                         if mgr_save_draft_disabled and is_direct_sub and not is_mgr_submitted and not step2_can_submit:
-                            st.caption("⚠️ 请先完成工作目标、通用能力、领导力（如有）的评分及考核评语后，方可保存草稿。")
-                        st.info("💡提示：请点击「保存草稿」，全部评价之后统一点击提交即可。")
+                            st.caption("⚠️ 保存草稿的目的是为了多个下属进行综合考虑，因此请先完成工作业绩、通用能力、管理目标（如有）的评分及考核评语后，再保存草稿。")
+                        st.info("💡提示：请点击「保存草稿」，全部下属评价之后，在下属名单上方点击「确认提交」，视为上级评分完成。")
                     else:
                         st.error("未找到对应下属的数据，请返回重试。")
                         st.button("🔙 返回", on_click=return_to_self)
@@ -5433,7 +5539,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                 with _gc3a:
                                     st.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center; white-space:nowrap;'>{self_grade}</div>", unsafe_allow_html=True)
                                 with _gc3b:
-                                    if st.button("🔗", key=f"dept_view_self_{r_id}", help="在页面下端查看自评"):
+                                    if st.button("查", key=f"dept_view_self_{r_id}", help="在页面下端查看自评", type="tertiary"):
                                         st.session_state.dept_view_self_record_id = r_id
                                         st.rerun()
 
@@ -5545,9 +5651,10 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                 _vgrade = str(_vf.get("自评等级", "暂无"))
                                 _col1, _col2 = st.columns([3, 1])
                                 with _col1:
-                                    st.markdown(f"<div class='module-title'>👤 查看自评：{_vname}</div>", unsafe_allow_html=True)
+                                    st.markdown("<div class='hero-title'>🎯 当前绩效目标设定与自评</div>", unsafe_allow_html=True)
                                     st.markdown(
                                         f"""<div style='font-size:14px; color:#E0E0E0; margin-top:6px; line-height:1.6;'>
+                                            <div><b>查看对象：{_vname}</b></div>
                                             <div>工号：{_vemp}</div>
                                             <div>岗位：{_vjob}</div>
                                             <div>自评得分：{_vscore}</div>
@@ -5560,7 +5667,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                         st.session_state.pop("dept_view_self_record_id", None)
                                         st.rerun()
                                 st.markdown("---")
-                                st.markdown("<div class='module-title'>💼 工作模块</div>", unsafe_allow_html=True)
+                                st.markdown("<div class='module-title'>💼 工作业绩</div>", unsafe_allow_html=True)
                                 _gcnt = 3
                                 for _gi in range(5, 3, -1):
                                     if _vf.get(f"工作目标{_gi}及总结") or _vf.get(f"工作目标{_gi}权重", 0):
@@ -5572,22 +5679,25 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                     _sw = int(float(_w)) if _w is not None else 0
                                     _sc = _vf.get(f"工作目标{_gi}自评得分", 0.0)
                                     _sc_str = str(_sc) if _sc is not None else "-"
-                                    st.markdown(f"**🎯 工作目标{_gi}及总结** <span style='font-size:14px; color:#888;'>(权重: {_sw}% | 自评: {_sc_str}分)</span>", unsafe_allow_html=True)
+                                    st.markdown(f"**工作业绩目标{_gi}及总结** <span style='font-size:14px; color:#888;'>(权重: {_sw}% | 自评: {_sc_str}分)</span>", unsafe_allow_html=True)
                                     st.text_area("_", value=_obj, height=80, disabled=True, key=f"dept_view_obj_{_gi}_{_dept_view_id}", label_visibility="collapsed")
-                                st.markdown("<div class='module-title'>⭐ 通用能力模块</div>", unsafe_allow_html=True)
-                                _comp = extract_text(_vf.get("通用能力总结"), "未填写").strip() or "未填写"
-                                _comp_sc = _vf.get("通用能力自评得分", 0.0)
-                                _comp_str = str(_comp_sc) if _comp_sc is not None else "-"
-                                st.markdown(f"**⭐ 通用能力总结** <span style='font-size:14px; color:#888;'>(自评: {_comp_str}分)</span>", unsafe_allow_html=True)
-                                st.text_area("_", value=_comp, height=100, disabled=True, key=f"dept_view_comp_{_dept_view_id}", label_visibility="collapsed")
                                 _vrole = extract_text(_vf.get("角色", "")).strip()
+                                st.markdown("<div class='module-title'>⭐ 通用能力</div>", unsafe_allow_html=True)
                                 if _vrole == "管理者":
-                                    st.markdown("<div class='module-title'>👑 领导力模块</div>", unsafe_allow_html=True)
+                                    st.caption("💡 提示：管理目标占比 20%、通用能力占比 20%（与员工自评一致）")
                                     _lead = extract_text(_vf.get("领导力总结"), "未填写").strip() or "未填写"
                                     _lead_sc = _vf.get("领导力自评得分", 0.0)
                                     _lead_str = str(_lead_sc) if _lead_sc is not None else "-"
-                                    st.markdown(f"**👑 领导力总结** <span style='font-size:14px; color:#888;'>(自评: {_lead_str}分)</span>", unsafe_allow_html=True)
+                                    st.markdown(f"**管理目标总结** <span style='font-size:14px; color:#888;'>(自评: {_lead_str}分)</span>", unsafe_allow_html=True)
                                     st.text_area("_", value=_lead, height=100, disabled=True, key=f"dept_view_lead_{_dept_view_id}", label_visibility="collapsed")
+                                    st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
+                                else:
+                                    st.caption("💡 提示：通用能力占比 20%")
+                                _comp = extract_text(_vf.get("通用能力总结"), "未填写").strip() or "未填写"
+                                _comp_sc = _vf.get("通用能力自评得分", 0.0)
+                                _comp_str = str(_comp_sc) if _comp_sc is not None else "-"
+                                st.markdown(f"**通用能力总结** <span style='font-size:14px; color:#888;'>(自评: {_comp_str}分)</span>", unsafe_allow_html=True)
+                                st.text_area("_", value=_comp, height=100, disabled=True, key=f"dept_view_comp_{_dept_view_id}", label_visibility="collapsed")
                                 st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
 
         # ===== 分管高管调整（一级导航） =====
@@ -5958,7 +6068,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                             with _vp_gc3a:
                                 st.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center; white-space:nowrap;'>{self_grade}</div>", unsafe_allow_html=True)
                             with _vp_gc3b:
-                                if st.button("🔗", key=f"vp_view_self_{r_id}", help="在页面下端查看自评"):
+                                if st.button("查", key=f"vp_view_self_{r_id}", help="在页面下端查看自评", type="tertiary"):
                                     st.session_state.vp_view_self_record_id = r_id
                                     st.rerun()
 
@@ -6070,9 +6180,10 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                 _vgrade = str(_vf.get("自评等级", "暂无"))
                                 _col1, _col2 = st.columns([3, 1])
                                 with _col1:
-                                    st.markdown(f"<div class='module-title'>👤 查看自评：{_vname}</div>", unsafe_allow_html=True)
+                                    st.markdown("<div class='hero-title'>🎯 当前绩效目标设定与自评</div>", unsafe_allow_html=True)
                                     st.markdown(
                                         f"""<div style='font-size:14px; color:#E0E0E0; margin-top:6px; line-height:1.6;'>
+                                            <div><b>查看对象：{_vname}</b></div>
                                             <div>工号：{_vemp}</div>
                                             <div>岗位：{_vjob}</div>
                                             <div>自评得分：{_vscore}</div>
@@ -6085,7 +6196,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                         st.session_state.pop("vp_view_self_record_id", None)
                                         st.rerun()
                                 st.markdown("---")
-                                st.markdown("<div class='module-title'>💼 工作模块</div>", unsafe_allow_html=True)
+                                st.markdown("<div class='module-title'>💼 工作业绩</div>", unsafe_allow_html=True)
                                 _gcnt = 3
                                 for _gi in range(5, 3, -1):
                                     if _vf.get(f"工作目标{_gi}及总结") or _vf.get(f"工作目标{_gi}权重", 0):
@@ -6097,22 +6208,25 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                     _sw = int(float(_w)) if _w is not None else 0
                                     _sc = _vf.get(f"工作目标{_gi}自评得分", 0.0)
                                     _sc_str = str(_sc) if _sc is not None else "-"
-                                    st.markdown(f"**🎯 工作目标{_gi}及总结** <span style='font-size:14px; color:#888;'>(权重: {_sw}% | 自评: {_sc_str}分)</span>", unsafe_allow_html=True)
+                                    st.markdown(f"**工作业绩目标{_gi}及总结** <span style='font-size:14px; color:#888;'>(权重: {_sw}% | 自评: {_sc_str}分)</span>", unsafe_allow_html=True)
                                     st.text_area("_", value=_obj, height=80, disabled=True, key=f"vp_view_obj_{_gi}_{_vp_view_id}", label_visibility="collapsed")
-                                st.markdown("<div class='module-title'>⭐ 通用能力模块</div>", unsafe_allow_html=True)
-                                _comp = extract_text(_vf.get("通用能力总结"), "未填写").strip() or "未填写"
-                                _comp_sc = _vf.get("通用能力自评得分", 0.0)
-                                _comp_str = str(_comp_sc) if _comp_sc is not None else "-"
-                                st.markdown(f"**⭐ 通用能力总结** <span style='font-size:14px; color:#888;'>(自评: {_comp_str}分)</span>", unsafe_allow_html=True)
-                                st.text_area("_", value=_comp, height=100, disabled=True, key=f"vp_view_comp_{_vp_view_id}", label_visibility="collapsed")
                                 _vrole = extract_text(_vf.get("角色", "")).strip()
+                                st.markdown("<div class='module-title'>⭐ 通用能力</div>", unsafe_allow_html=True)
                                 if _vrole == "管理者":
-                                    st.markdown("<div class='module-title'>👑 领导力模块</div>", unsafe_allow_html=True)
+                                    st.caption("💡 提示：管理目标占比 20%、通用能力占比 20%（与员工自评一致）")
                                     _lead = extract_text(_vf.get("领导力总结"), "未填写").strip() or "未填写"
                                     _lead_sc = _vf.get("领导力自评得分", 0.0)
                                     _lead_str = str(_lead_sc) if _lead_sc is not None else "-"
-                                    st.markdown(f"**👑 领导力总结** <span style='font-size:14px; color:#888;'>(自评: {_lead_str}分)</span>", unsafe_allow_html=True)
+                                    st.markdown(f"**管理目标总结** <span style='font-size:14px; color:#888;'>(自评: {_lead_str}分)</span>", unsafe_allow_html=True)
                                     st.text_area("_", value=_lead, height=100, disabled=True, key=f"vp_view_lead_{_vp_view_id}", label_visibility="collapsed")
+                                    st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
+                                else:
+                                    st.caption("💡 提示：通用能力占比 20%")
+                                _comp = extract_text(_vf.get("通用能力总结"), "未填写").strip() or "未填写"
+                                _comp_sc = _vf.get("通用能力自评得分", 0.0)
+                                _comp_str = str(_comp_sc) if _comp_sc is not None else "-"
+                                st.markdown(f"**通用能力总结** <span style='font-size:14px; color:#888;'>(自评: {_comp_str}分)</span>", unsafe_allow_html=True)
+                                st.text_area("_", value=_comp, height=100, disabled=True, key=f"vp_view_comp_{_vp_view_id}", label_visibility="collapsed")
                                 st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
 
         if idx_reports is not None:
@@ -6229,8 +6343,13 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                     if cand in GRADE_OPTIONS:
                                         final_grade = cand
                                         break
-                                if final_grade in GRADE_OPTIONS:
-                                    grade_counts[final_grade] += 1
+                                # 普通管理者：分布图与「上级评分」中「考核等级」一致，仅统计「考核结果」；分管/一级负责人仍用最终口径（含调整后）
+                                if not (is_dept_head or is_vp):
+                                    _dist_grade = mgr_grade if mgr_grade in GRADE_OPTIONS else "-"
+                                else:
+                                    _dist_grade = final_grade
+                                if _dist_grade in GRADE_OPTIONS:
+                                    grade_counts[_dist_grade] += 1
 
                                 _base = {"total": 0, "done": 0, "grades": {g: 0 for g in GRADE_OPTIONS}}
                                 dept_info = dept_stats.setdefault(dept, {

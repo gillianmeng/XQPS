@@ -16,8 +16,10 @@ if [ -z "$XQPS_CONFIG_DIR" ]; then
 fi
 
 echo "启动 XQPS 服务 (端口: $PORT)..."
-echo "人力资源部演示: http://localhost:$PORT/?demo_entry=1&demo_dept=hr"
-echo "研发质量部演示:  http://localhost:$PORT/?demo_entry=1"
+echo "人力资源部演示:     http://localhost:$PORT/?demo_entry=1&demo_dept=hr"
+echo "金融产品与研究部:   http://localhost:$PORT/?demo_entry=1&demo_dept=fin_product"
+echo "金融运营部演示:     http://localhost:$PORT/?demo_entry=1&demo_dept=fin_ops"
+echo "合并多部门演示:     http://localhost:$PORT/?demo_entry=1"
 echo ""
 
 APP_ENV="$APP_ENV" ENABLE_DEMO_LOGIN="$ENABLE_DEMO_LOGIN" /data/conda/envs/py310/bin/python -m streamlit run new_app.py --server.address 0.0.0.0 --server.port "$PORT"

@@ -126,7 +126,12 @@ def main():
     if not departments:
         print("用法: python get_open_ids.py <一级部门1> [一级部门2] ...", file=sys.stderr)
         print("      python get_open_ids.py -l   # 列出所有一级部门", file=sys.stderr)
-        print("示例: python get_open_ids.py 人力资源部 > demo_users_hr.json", file=sys.stderr)
+        print(
+            "示例: python get_open_ids.py 人力资源部 > demo_users_hr.json\n"
+            "      python get_open_ids.py 金融产品与研究部 > demo_users_fin_product.json\n"
+            "      python get_open_ids.py 金融运营部 > demo_users_fin_ops.json",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     dept_set = set(departments)
