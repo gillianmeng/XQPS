@@ -26,10 +26,8 @@ demo_users_wealth.json
 !demo_users_wealth.example.json
 demo_users_asset.json
 !demo_users_asset.example.json
-demo_users_fin_product.json
-!demo_users_fin_product.example.json
-demo_users_fin_ops.json
-!demo_users_fin_ops.example.json
+# 金融产品与研究部、金融运营部：与 hr/wealth/rd/asset 一致，真实 demo 纳入版本库供部署使用
+# （若需本地覆盖，可改名或通过部署流水线注入）
 
 # 克隆的公司仓库目录
 xqps/

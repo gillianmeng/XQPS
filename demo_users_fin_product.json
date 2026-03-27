@@ -1,0 +1,121 @@
+{
+  "users": [
+    {
+      "label": "王珞奇（工号: XQ1100）",
+      "name": "王珞奇",
+      "open_id": "ou_3f52a67b080f86f4ecaa0b512a20dc2e",
+      "emp_id": "XQ1100",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融产品与研究部"
+    },
+    {
+      "label": "卢月辉（工号: XQ1236）",
+      "name": "卢月辉",
+      "open_id": "ou_5654d5959e1c48e7940d1c3f5ef5863a",
+      "emp_id": "XQ1236",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融产品与研究部"
+    },
+    {
+      "label": "何昳（工号: XQ1608）",
+      "name": "何昳",
+      "open_id": "ou_728979ae2f4d65c69cf6440756e26783",
+      "emp_id": "XQ1608",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融产品与研究部"
+    },
+    {
+      "label": "姜玉婷（工号: XQ2305）",
+      "name": "姜玉婷",
+      "open_id": "ou_d9e1bb6de21be4d7bde5d1ad4aea0eb7",
+      "emp_id": "XQ2305",
+      "job_title": "岗位岗位岗位",
+      "role": "管理者",
+      "test_env": "金融产品与研究部"
+    },
+    {
+      "label": "石慧杰（工号: XQ2312）",
+      "name": "石慧杰",
+      "open_id": "ou_ed177adc53530c8a73ccd1a98c34af82",
+      "emp_id": "XQ2312",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融产品与研究部"
+    },
+    {
+      "label": "冯诗茵（工号: XQ2343）",
+      "name": "冯诗茵",
+      "open_id": "ou_0b3fbc6a7734fa0123df23ff7fd26a32",
+      "emp_id": "XQ2343",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融产品与研究部"
+    },
+    {
+      "label": "隗睿（工号: XQ2383）",
+      "name": "隗睿",
+      "open_id": "ou_7e71ca1af7e6819548597db77496e0cd",
+      "emp_id": "XQ2383",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融产品与研究部"
+    },
+    {
+      "label": "卞正之（工号: XQ2392）",
+      "name": "卞正之",
+      "open_id": "ou_680858f01445851ecdaae1dea87a3910",
+      "emp_id": "XQ2392",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融产品与研究部"
+    },
+    {
+      "label": "孙维艺（工号: XQ2409）",
+      "name": "孙维艺",
+      "open_id": "ou_a0724bf0ef52b07f753d4b3e3d72940e",
+      "emp_id": "XQ2409",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融产品与研究部"
+    },
+    {
+      "label": "孙思维（工号: XQ2396）",
+      "name": "孙思维",
+      "open_id": "ou_e82268cf8dfc3047e02d79e2703b3d1f",
+      "emp_id": "XQ2396",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融产品与研究部"
+    },
+    {
+      "label": "于梁（工号: XQ2447）",
+      "name": "于梁",
+      "open_id": "ou_754c04d0b6ea40d584e2420ed729e8d8",
+      "emp_id": "XQ2447",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融产品与研究部"
+    },
+    {
+      "label": "孔笑雪（工号: XQ2440）",
+      "name": "孔笑雪",
+      "open_id": "ou_7e93e7a198bd4e857cf04d17952618eb",
+      "emp_id": "XQ2440",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融产品与研究部"
+    },
+    {
+      "label": "杜泽坤（工号: XQ2441）",
+      "name": "杜泽坤",
+      "open_id": "ou_23147530999da28a9ad2e9b24f207584",
+      "emp_id": "XQ2441",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融产品与研究部"
+    }
+  ]
+}

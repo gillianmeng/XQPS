@@ -73,7 +73,7 @@ APP_ENV=staging ENABLE_DEMO_LOGIN=true streamlit run new_app.py --server.port 85
 
 默认合并六部门：依次读取 `demo_users_hr.json`、`demo_users_wealth.json`、`demo_users.json`、`demo_users_asset.json`、`demo_users_fin_product.json`、`demo_users_fin_ops.json`（及对应 `.example.json` 回退）并按 `open_id` 去重。
 
-若某部门真实文件未随部署（如 `demo_users_fin_ops.json` 在 `.gitignore` 中），会回退到 `demo_users_*.example.json`。**仓库内示例文件**含占位账号，合并入口即可看到六部门；对接飞书真实数据时，请用下方命令生成并部署到服务器。
+若某部门 `demo_users_*.json` 缺失，会回退到对应 `.example.json`（可能为空）。**金融产品与研究部、金融运营部** 的完整名单已与人力资源部等一致**随仓库发布**；更新名单时用下方命令重新生成后提交。
 
 - 研发质量保障部：`demo_users.json`（参考 `demo_users.example.json`）
 - 人力资源部：`demo_users_hr.json`（参考 `demo_users_hr.example.json`）
