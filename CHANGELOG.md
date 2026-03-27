@@ -1,5 +1,16 @@
 # 更新日志
 
+## [v1.1.5] - 2026-03-24
+
+### 修复（界面）
+- 侧边栏「员工信息」：部门层级用 `normalize_dept_text` 过滤飞书占位（`-`、`—` 等），避免出现「一级部门 丨   丨   丨」；岗位为空时不单独显示多余分隔。
+
+### 部署与演示（GitLab / 测试端口）
+- 测试环境启动：`./run_demo.sh` 或 `PORT=<端口> ./run_demo.sh`（默认 8501），需 `APP_ENV=staging`、`ENABLE_DEMO_LOGIN=true`（脚本已设置）。
+- **合并入口** `http://<主机>:<端口>/?demo_entry=1`（或 `demo_dept=all`）已合并 **六部门** demo（hr / wealth / rd / asset / fin_product / fin_ops）；单部门见脚本打印的 `demo_dept=` 链接。
+
+---
+
 ## [v1.1.4] - 2026-03-24
 
 ### 修复（演示）

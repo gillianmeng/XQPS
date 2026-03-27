@@ -4213,7 +4213,8 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
     )
     _cycle_from_record = _normalize_cycle_display(_cycle_raw) or _cycle_raw
     current_cycle = _read_admin_cycle_override() or _cycle_from_record
-    dept_parts = [d for d in [extract_text(fields.get(f'{k}级部门'), "") for k in ["一", "二", "三", "四"]] if d and d != "未获取"]
+    # 各级部门：飞书常填「-」或空白占位，若不过滤会出现「一级 丨   丨   丨」
+    dept_parts = [d for d in (normalize_dept_text(fields.get(f"{k}级部门")) for k in ["一", "二", "三", "四"]) if d]
     department = "-".join(dept_parts) if dept_parts else "未获取"
     manager = extract_text(fields.get('直接评价人') or fields.get('评价人'))
     vp = extract_text(fields.get('分管高管') or fields.get('高管'))
@@ -4321,11 +4322,18 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
 
     st.sidebar.markdown("### ℹ️ 员工信息")
     dept_display = " 丨 ".join(dept_parts) if dept_parts else "未获取"
+    _jt = (job_title or "").strip()
+    _jt_empty = _jt in ("", "未获取", "-", "--", "—")
+    _role_disp = st.session_state.role or ""
+    job_role_line = (
+        f"{_jt} 丨 {_role_disp}" if not _jt_empty and _role_disp
+        else (_jt if not _jt_empty else _role_disp or "未获取")
+    )
     st.sidebar.markdown(f"""
         <div style="background-color: rgba(38, 39, 48, 0.8); padding: 15px; border-radius: 8px; border: 1px solid #333;">
             <div style="margin-bottom: 10px; color: #b0b0b0; font-size: 14px;">{user_name} 丨 {emp_id}</div>
             <div style="margin-bottom: 10px; color: #b0b0b0; font-size: 14px;">{dept_display}</div>
-            <div style="color: #b0b0b0; font-size: 14px;">{job_title} | {st.session_state.role}</div>
+            <div style="color: #b0b0b0; font-size: 14px;">{job_role_line}</div>
         </div>
         """, unsafe_allow_html=True)
     st.sidebar.markdown("<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:12px 0;'/>", unsafe_allow_html=True)
