@@ -1,10 +1,24 @@
 # 更新日志
 
-## 未发布
+## [v1.1.3] - 2026-03-24
 
-### 文档
-- 合并 `docs/飞书字段与页面对应关系.md` 至 `docs/飞书表头与模块对应关系.md` 并删除旧文件；补充公告来源（admin_config / frozen_announcements）、后台角色、特殊判断，移除与代码不符的「截止日期」列说明。
-- 删除易过时文档：`docs/Tab及页面内容梳理.md`、`docs/确认提交逻辑与设置.md`；删除 `backup/` 下历史脚本备份；根目录 `xqps.zip` 已忽略（见 `.gitignore`）。
+### 新增（演示）
+- 演示合并入口纳入 **金融产品与研究部**、**金融运营部**：`load_demo_users` 在 `demo_dept` 为空/`all` 时合并六套配置；单部门 `demo_dept=fin_product`、`demo_dept=fin_ops`。
+- 仓库内提供 `demo_users_fin_product.example.json`、`demo_users_fin_ops.example.json`；真实 `demo_users_fin_product.json`、`demo_users_fin_ops.json` 列入 `.gitignore`（与其它部门 demo 一致）。
+
+### 优化（界面与体验）
+- 员工自评、上级评分、一级部门/分管高管「查」视图：**工作业绩 / 通用能力 / 管理目标** 文案与模块顺序与自评页一致（管理目标先于通用能力）。
+- 上级评分侧栏与草稿提示用语对齐；「查」按钮样式统一。
+- 飞书全表缓存、登录与主流程 **spinner** 自定义文案；Spinner 居中布局 CSS（`xqps_app/feishu_api.py`、`new_app.py`）。
+
+### 脚本与文档
+- `run_demo.sh`：支持环境变量 **`PORT`**（默认 8501），与 `bin/start_server.sh` 行为一致，打印的演示 URL 随端口变化。
+- `bin/start_server.sh`、`get_open_ids.py`：补充金融产品与研究部、金融运营部相关说明。
+- `README.md`、`docs/员工个人权限与设置.md`：演示入口由「四/三部门」更正为 **六部门** 合并逻辑与 URL。
+
+### 文档（仓库整理，此前未单独发版）
+- 合并 `docs/飞书字段与页面对应关系.md` 至 `docs/飞书表头与模块对应关系.md` 并删除旧文件；补充公告来源、后台角色等说明。
+- 删除易过时文档与 `backup/` 历史脚本备份；根目录 `xqps.zip` 已忽略（见 `.gitignore`）。
 
 ---
 
