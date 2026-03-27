@@ -1,5 +1,6 @@
 from __future__ import annotations
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import urllib.parse
 import time
@@ -50,6 +51,58 @@ GOAL_WEIGHT_MIN_PCT = 5
 GRADE_OPTIONS = ["S", "A", "B+", "B", "B-", "C"]
 # 绩效等级图表配色（S/A蓝、B+绿、B灰、B-橙、C红），全应用统一
 GRADE_CHART_COLORS = ["#4CAFEE", "#4CAFEE", "#8BC34A", "#90A4AE", "#FFC107", "#F44336"]
+
+
+def _scroll_into_view_anchor(anchor_id: str, *, panel_id: str | None = None) -> None:
+    """一级部门负责人 / 分管高管点击「查」后滚动：优先到面板标题，否则到列表下锚点。
+    每次调用生成唯一 HTML/key，避免 Streamlit 复用 iframe 导致第二次点击不执行脚本。"""
+    aid = json.dumps(anchor_id)
+    pid = json.dumps(panel_id) if panel_id else "null"
+    uniq = time.time_ns()
+    html = f"""<div style="display:none" aria-hidden="true" data-xqps-scroll="{uniq}"></div>
+<script>
+(function() {{
+  const anchorId = {aid};
+  const panelId = {pid};
+  function findById(id) {{
+    if (!id) return null;
+    try {{
+      let el = document.getElementById(id);
+      if (el) return el;
+      if (window.parent && window.parent.document) {{
+        el = window.parent.document.getElementById(id);
+        if (el) return el;
+      }}
+      if (window.parent && window.parent.parent && window.parent.parent.document) {{
+        try {{
+          el = window.parent.parent.document.getElementById(id);
+          if (el) return el;
+        }} catch (e) {{}}
+      }}
+    }} catch (e) {{}}
+    return null;
+  }}
+  function scrollToTarget() {{
+    let el = null;
+    if (panelId) el = findById(panelId);
+    if (!el) el = findById(anchorId);
+    if (el) {{
+      el.scrollIntoView({{ behavior: "smooth", block: "start" }});
+      return true;
+    }}
+    return false;
+  }}
+  setTimeout(scrollToTarget, 50);
+  setTimeout(scrollToTarget, 200);
+  setTimeout(scrollToTarget, 500);
+  setTimeout(scrollToTarget, 900);
+}})();
+</script>"""
+    try:
+        components.html(html, height=0, key=f"xqps_scroll_{uniq}")
+    except TypeError:
+        components.html(html, height=0)
+
 
 # --- 初始化会话状态 ---
 if 'user_info' not in st.session_state:
@@ -3290,6 +3343,7 @@ def login_page():
 
 def jump_to_subordinate(sub_id):
     st.session_state.selected_subordinate_id = sub_id
+    st.session_state._pending_scroll_mgr_sub_view = True
 
 def return_to_self():
     st.session_state.selected_subordinate_id = None
@@ -3757,6 +3811,40 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
         background: transparent !important;
         color: #ffffff !important;
         border: 1px solid rgba(255,255,255,0.25) !important;
+    }
+    /* 上级评分·下属评价区：评分下拉与评语框默认蓝色描边+微发光（与聚焦态一致风格，便于扫视） */
+    div[class*="st-key-mgr_work_score"] [data-baseweb="select"] > div,
+    div[class*="st-key-mgr_comp_score"] [data-baseweb="select"] > div,
+    div[class*="st-key-mgr_lead_score"] [data-baseweb="select"] > div {
+        border: 1px solid rgba(33, 150, 243, 0.88) !important;
+        box-shadow: 0 0 0 1px rgba(33, 150, 243, 0.38), 0 0 14px rgba(33, 150, 243, 0.45) !important;
+        border-radius: 8px !important;
+        background-color: rgba(33, 150, 243, 0.08) !important;
+    }
+    div[class*="st-key-mgr_comment"] textarea {
+        border: 1px solid rgba(33, 150, 243, 0.88) !important;
+        box-shadow: 0 0 0 1px rgba(33, 150, 243, 0.38), 0 0 14px rgba(33, 150, 243, 0.45) !important;
+        border-radius: 8px !important;
+        background-color: rgba(33, 150, 243, 0.08) !important;
+    }
+    div[class*="st-key-mgr_work_score"] [data-baseweb="select"] > div:focus-within,
+    div[class*="st-key-mgr_comp_score"] [data-baseweb="select"] > div:focus-within,
+    div[class*="st-key-mgr_lead_score"] [data-baseweb="select"] > div:focus-within {
+        box-shadow: 0 0 0 2px rgba(100, 181, 246, 0.65), 0 0 22px rgba(33, 150, 243, 0.55) !important;
+        border-color: rgba(129, 212, 250, 0.95) !important;
+    }
+    div[class*="st-key-mgr_comment"] textarea:focus {
+        outline: none !important;
+        box-shadow: 0 0 0 2px rgba(100, 181, 246, 0.65), 0 0 22px rgba(33, 150, 243, 0.55) !important;
+        border-color: rgba(129, 212, 250, 0.95) !important;
+    }
+    /* 禁用态略淡化，仍保留提示框感 */
+    div[class*="st-key-mgr_work_score"] [data-baseweb="select"][aria-disabled="true"] > div,
+    div[class*="st-key-mgr_comp_score"] [data-baseweb="select"][aria-disabled="true"] > div,
+    div[class*="st-key-mgr_lead_score"] [data-baseweb="select"][aria-disabled="true"] > div,
+    div[class*="st-key-mgr_comment"] textarea:disabled {
+        opacity: 0.82 !important;
+        box-shadow: 0 0 0 1px rgba(33, 150, 243, 0.22), 0 0 10px rgba(33, 150, 243, 0.22) !important;
     }
     /* 团队历史绩效「直属」按钮：透明底、蓝色框线、小号加粗蓝字 */
     div.element-container:has(.history-direct-btn-marker) {
@@ -5007,6 +5095,10 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                         st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
 
                     st.markdown("</div>", unsafe_allow_html=True)
+                    st.markdown(
+                        '<div id="xqps-mgr-sub-list-anchor"></div>',
+                        unsafe_allow_html=True,
+                    )
 
                 # --- 3. 管理者评估下属的具体表单 ---
                 if is_evaluating_sub:
@@ -5025,7 +5117,10 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                         
                         col_head1, col_head2 = st.columns([3, 1])
                         with col_head1:
-                            st.markdown("<div class='hero-title'>🎯 当前绩效目标设定与自评</div>", unsafe_allow_html=True)
+                            st.markdown(
+                                "<div class='hero-title' id='xqps-mgr-eval-panel-top'>🎯 当前绩效目标设定与自评</div>",
+                                unsafe_allow_html=True,
+                            )
                             st.markdown(
                                 f"""
                                 <div style='font-size:14px; color:#E0E0E0; margin-top:6px; line-height:1.6;'>
@@ -5167,6 +5262,11 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                     else:
                         st.error("未找到对应下属的数据，请返回重试。")
                         st.button("🔙 返回", on_click=return_to_self)
+                    if st.session_state.pop("_pending_scroll_mgr_sub_view", False):
+                        _scroll_into_view_anchor(
+                            "xqps-mgr-sub-list-anchor",
+                            panel_id="xqps-mgr-eval-panel-top",
+                        )
             else:
                 st.info("💡 提示：当前暂无下属。")
 
@@ -5549,6 +5649,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                 with _gc3b:
                                     if st.button("查", key=f"dept_view_self_{r_id}", help="在页面下端查看自评", type="tertiary"):
                                         st.session_state.dept_view_self_record_id = r_id
+                                        st.session_state._pending_scroll_dept_self_view = True
                                         st.rerun()
 
                             c4.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center;'>{mgr_grade}</div>", unsafe_allow_html=True)
@@ -5638,6 +5739,10 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                         else:
 
                             st.info("💡 提示：我也有底线的ಠ౪ಠ")
+                            st.markdown(
+                                '<div id="xqps-dept-self-view-anchor"></div>',
+                                unsafe_allow_html=True,
+                            )
 
                         st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
 
@@ -5659,7 +5764,10 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                 _vgrade = str(_vf.get("自评等级", "暂无"))
                                 _col1, _col2 = st.columns([3, 1])
                                 with _col1:
-                                    st.markdown("<div class='hero-title'>🎯 当前绩效目标设定与自评</div>", unsafe_allow_html=True)
+                                    st.markdown(
+                                        "<div class='hero-title' id='xqps-dept-self-view-panel-top'>🎯 当前绩效目标设定与自评</div>",
+                                        unsafe_allow_html=True,
+                                    )
                                     st.markdown(
                                         f"""<div style='font-size:14px; color:#E0E0E0; margin-top:6px; line-height:1.6;'>
                                             <div><b>查看对象：{_vname}</b></div>
@@ -5707,6 +5815,11 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                 st.markdown(f"**通用能力总结** <span style='font-size:14px; color:#888;'>(自评: {_comp_str}分)</span>", unsafe_allow_html=True)
                                 st.text_area("_", value=_comp, height=100, disabled=True, key=f"dept_view_comp_{_dept_view_id}", label_visibility="collapsed")
                                 st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
+                        if st.session_state.pop("_pending_scroll_dept_self_view", False):
+                            _scroll_into_view_anchor(
+                                "xqps-dept-self-view-anchor",
+                                panel_id="xqps-dept-self-view-panel-top",
+                            )
 
         # ===== 分管高管调整（一级导航） =====
         if idx_vp is not None:
@@ -6078,6 +6191,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                             with _vp_gc3b:
                                 if st.button("查", key=f"vp_view_self_{r_id}", help="在页面下端查看自评", type="tertiary"):
                                     st.session_state.vp_view_self_record_id = r_id
+                                    st.session_state._pending_scroll_vp_self_view = True
                                     st.rerun()
 
                         c4.markdown(f"<div class='sub-list-cell' style='color:#b0b0b0; text-align:center;'>{mgr_grade_display}</div>", unsafe_allow_html=True)
@@ -6167,6 +6281,10 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                     else:
 
                         st.info("💡 提示：我也有底线的ಠ౪ಠ")
+                        st.markdown(
+                            '<div id="xqps-vp-self-view-anchor"></div>',
+                            unsafe_allow_html=True,
+                        )
 
                     st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
 
@@ -6188,7 +6306,10 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                 _vgrade = str(_vf.get("自评等级", "暂无"))
                                 _col1, _col2 = st.columns([3, 1])
                                 with _col1:
-                                    st.markdown("<div class='hero-title'>🎯 当前绩效目标设定与自评</div>", unsafe_allow_html=True)
+                                    st.markdown(
+                                        "<div class='hero-title' id='xqps-vp-self-view-panel-top'>🎯 当前绩效目标设定与自评</div>",
+                                        unsafe_allow_html=True,
+                                    )
                                     st.markdown(
                                         f"""<div style='font-size:14px; color:#E0E0E0; margin-top:6px; line-height:1.6;'>
                                             <div><b>查看对象：{_vname}</b></div>
@@ -6236,6 +6357,11 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                 st.markdown(f"**通用能力总结** <span style='font-size:14px; color:#888;'>(自评: {_comp_str}分)</span>", unsafe_allow_html=True)
                                 st.text_area("_", value=_comp, height=100, disabled=True, key=f"vp_view_comp_{_vp_view_id}", label_visibility="collapsed")
                                 st.markdown("<hr class='sub-hr'/>", unsafe_allow_html=True)
+                        if st.session_state.pop("_pending_scroll_vp_self_view", False):
+                            _scroll_into_view_anchor(
+                                "xqps-vp-self-view-anchor",
+                                panel_id="xqps-vp-self-view-panel-top",
+                            )
 
         if idx_reports is not None:
             with tabs[idx_reports]:
