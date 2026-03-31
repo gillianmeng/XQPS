@@ -49,8 +49,8 @@ SCORE_OPTIONS = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
 # 员工自评：每个工作目标权重单项下限（0% 不可提交）
 GOAL_WEIGHT_MIN_PCT = 5
 GRADE_OPTIONS = ["S", "A", "B+", "B", "B-", "C"]
-# 绩效等级图表配色（S/A蓝、B+绿、B灰、B-橙、C红），全应用统一
-GRADE_CHART_COLORS = ["#4CAFEE", "#4CAFEE", "#8BC34A", "#90A4AE", "#FFC107", "#F44336"]
+# 绩效等级图表配色（S/A 须明显区分；B+绿、B灰、B-橙、C红不变）
+GRADE_CHART_COLORS = ["#00BCD4", "#5C6BC0", "#8BC34A", "#90A4AE", "#FFC107", "#F44336"]
 
 
 def _scroll_into_view_anchor(anchor_id: str, *, panel_id: str | None = None) -> None:
@@ -518,6 +518,82 @@ def _is_executive(rec):
     """飞书表格「特殊判断」为「高管」的员工"""
     v = _extract_text(rec.get("fields", {}).get("特殊判断"), "").strip()
     return v == "高管"
+
+
+def _vp_report_scope_for_quota(all_records, user_name, current_cycle, session_state):
+    """与管理者「视图与报表」中分管高管「分管范围总数」相同的数据范围：周期 + 名下（不含本人）+ 销售/非销售筛选。"""
+    def _pick_cycle(ff):
+        for k in ["绩效考核周期", "考核周期", "本次绩效考核周期", "本次考核周期"]:
+            v = _extract_text(ff.get(k), "").strip()
+            if v:
+                return _normalize_cycle_display(v) or v
+        return current_cycle
+    scoped = []
+    for rec in all_records or []:
+        rf = rec.get("fields", {})
+        emp_name = _extract_text(rf.get("姓名"), "").strip()
+        vp_str = _extract_text(rf.get("分管高管") or rf.get("高管"), "").strip()
+        if not user_name or user_name not in vp_str or emp_name == user_name:
+            continue
+        cyc = _pick_cycle(rf)
+        if not _cycles_match(cyc, current_cycle):
+            continue
+        scoped.append(rec)
+    if not scoped:
+        return []
+    report_sales = [r for r in scoped if _extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "否"]
+    report_non_sales = [r for r in scoped if _extract_text(r.get("fields", {}).get("是否绩效关联奖金"), "").strip() == "是"]
+    has_bonus_no = len(report_sales) > 0 and len(report_non_sales) > 0
+    if has_bonus_no:
+        _sk = session_state.get("report_bonus_scope_filter", "全部")
+        if _sk == "全部":
+            return scoped
+        if _sk == "销售":
+            return report_sales
+        return report_non_sales
+    return report_sales if report_sales else scoped
+
+
+def _vp_quota_exceeded_for_confirm(session_state, report_scope) -> bool:
+    """按「分管范围总数」表：若 S/A、B+、B+及以上 任一实际人数超过上限则 True；待确认人员用 session 中 vp_adj_grade_*。"""
+    if not report_scope:
+        return False
+    grade_counts_bonus = Counter()
+    for rec in report_scope:
+        f = rec.get("fields", {})
+        r_id = rec.get("record_id")
+        vp_done = _extract_text(f.get("分管高管调整完毕", "")).strip() == "是"
+        vp_adj = _extract_text(f.get("分管高管调整考核结果"), "").strip()
+        if not vp_done:
+            mgr_g = _extract_text(f.get("考核结果", "-")).strip() or "-"
+            dept_adj_v = _extract_text(f.get("一级部门调整考核结果", "")).strip()
+            dept_adj_v = dept_adj_v if dept_adj_v in GRADE_OPTIONS else mgr_g
+            adj_existing = vp_adj
+            def_grade = adj_existing if adj_existing in GRADE_OPTIONS else (dept_adj_v if dept_adj_v in GRADE_OPTIONS else mgr_g)
+            vp_adj = session_state.get(f"vp_adj_grade_{r_id}", def_grade)
+            if vp_adj not in GRADE_OPTIONS:
+                vp_adj = def_grade if def_grade in GRADE_OPTIONS else ""
+        dept_adj = _extract_text(f.get("一级部门调整考核结果"), "").strip()
+        mgr_grade = _extract_text(f.get("考核结果"), "").strip()
+        final_from_field = _extract_text(f.get("最终绩效结果") or f.get("最终考核结果"), "").strip()
+        final_grade = "-"
+        for cand in [vp_adj, dept_adj, mgr_grade, final_from_field]:
+            if cand in GRADE_OPTIONS:
+                final_grade = cand
+                break
+        if final_grade in GRADE_OPTIONS:
+            grade_counts_bonus[final_grade] += 1
+    base_cnt = len(report_scope)
+    bmc_actual = grade_counts_bonus.get("B-", 0) + grade_counts_bonus.get("C", 0)
+    sa_theory = math.floor(base_cnt * 0.20) if base_cnt else 0
+    bp_base = math.floor(base_cnt * 0.15) if base_cnt else 0
+    bp_cap = math.floor(base_cnt * 0.25) if base_cnt else 0
+    bp_theory = min(bp_cap, bp_base + bmc_actual)
+    sapb_theory = sa_theory + bp_theory
+    actual_sa = grade_counts_bonus.get("S", 0) + grade_counts_bonus.get("A", 0)
+    actual_bp = grade_counts_bonus.get("B+", 0)
+    actual_sapb = actual_sa + actual_bp
+    return (actual_sa > sa_theory) or (actual_bp > bp_theory) or (actual_sapb > sapb_theory)
 
 
 # HRBP 导出若需保留高管行时的字段白名单；当前 HRBP 导出已排除高管记录。
@@ -2013,7 +2089,7 @@ def _render_admin_dashboard():
             return [""] * len(row)
         _admin_dept_df = _admin_dept_df.style.set_properties(**{"text-align": "center"}).apply(_admin_dept_style, axis=1)
     st.dataframe(_admin_dept_df, use_container_width=True, hide_index=True)
-    st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 提示：各部门含一级部门负责人，高管单列；如果一级部门负责人和高管为同一人，则一级部门中不含，高管单列。</div>", unsafe_allow_html=True)
+    st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 提示：各部门含一级部门负责人；如果一级部门负责人和高管为同一人，则一级部门中不含。</div>", unsafe_allow_html=True)
 
     # 管理员数据下载：可选择列导出
     st.markdown("<div style='height: 20px;'></div><hr style='border:none;border-top:1px solid rgba(255,255,255,0.15);margin:0 0 20px 0;'/><div style='height: 8px;'></div>", unsafe_allow_html=True)
@@ -3033,13 +3109,14 @@ def _load_demo_users_from_files(candidate_files):
 def load_demo_users(demo_dept=None):
     """
     读取本地 demo 用户配置。
-    demo_dept: None 或 "all" -> 合并各部门（人力资源部、研发质量保障部、财富顾问部、资产管理部、金融产品与研究部、金融运营部）
+    demo_dept: None 或 "all" -> 合并各部门（人力资源部、研发质量保障部、财富顾问部、资产管理部、金融产品与研究部、金融运营部、战略发展部）
     demo_dept: "hr" -> 人力资源部 (demo_users_hr.json)
     demo_dept: "wealth" -> 财富顾问部 (demo_users_wealth.json)
     demo_dept: "rd" -> 研发质量保障部 (demo_users.json)
     demo_dept: "asset" -> 资产管理部 (demo_users_asset.json)
     demo_dept: "fin_product" -> 金融产品与研究部 (demo_users_fin_product.json)
     demo_dept: "fin_ops" -> 金融运营部 (demo_users_fin_ops.json)
+    demo_dept: "strategy" -> 战略发展部 (demo_users_strategy.json)
     """
     if demo_dept in (None, "", "all"):
         # 合并各部门：依次读取，按 open_id 去重
@@ -3050,6 +3127,7 @@ def load_demo_users(demo_dept=None):
             ["demo_users_asset.json", "demo_users_asset.example.json"],
             ["demo_users_fin_product.json", "demo_users_fin_product.example.json"],
             ["demo_users_fin_ops.json", "demo_users_fin_ops.example.json"],
+            ["demo_users_strategy.json", "demo_users_strategy.example.json"],
         ]
         seen_open_ids = set()
         raw_users = []
@@ -3071,6 +3149,8 @@ def load_demo_users(demo_dept=None):
             candidate_files = ["demo_users_fin_product.json", "demo_users_fin_product.example.json"]
         elif demo_dept == "fin_ops":
             candidate_files = ["demo_users_fin_ops.json", "demo_users_fin_ops.example.json"]
+        elif demo_dept == "strategy":
+            candidate_files = ["demo_users_strategy.json", "demo_users_strategy.example.json"]
         else:
             candidate_files = ["demo_users.json", "demo_users.example.json"]
         raw_users = _load_demo_users_from_files(candidate_files)
@@ -3102,7 +3182,7 @@ def load_demo_users(demo_dept=None):
 # --- 登录页面逻辑 ---
 def login_page():
     st.markdown("<style>" + _SPINNER_LAYOUT_CSS_RULES + "</style>", unsafe_allow_html=True)
-    demo_dept = st.query_params.get("demo_dept", "").strip() or None  # hr / wealth / rd / asset / fin_product / fin_ops
+    demo_dept = st.query_params.get("demo_dept", "").strip() or None  # hr / wealth / rd / asset / fin_product / fin_ops / strategy
     is_demo_entry = st.query_params.get("demo_entry") == "1"
     show_demo_only = is_demo_entry and ENABLE_DEMO_LOGIN and not IS_PROD
     show_admin_entry = "admin_entry" in st.query_params and str(st.query_params.get("admin_entry", "")).strip() in ("1", "true", "yes")
@@ -3117,7 +3197,7 @@ def login_page():
 
     if show_demo_only:
         dept_label = (
-            "人力资源部、研发质量保障部、财富顾问部、资产管理部、金融产品与研究部、金融运营部"
+            "人力资源部、研发质量保障部、财富顾问部、资产管理部、金融产品与研究部、金融运营部、战略发展部"
             if demo_dept in (None, "", "all")
             else {
                 "hr": "人力资源部",
@@ -3126,6 +3206,7 @@ def login_page():
                 "asset": "资产管理部",
                 "fin_product": "金融产品与研究部",
                 "fin_ops": "金融运营部",
+                "strategy": "战略发展部",
             }.get(demo_dept, "研发质量保障部")
         )
         st.markdown("### 🎬 演示测试入口")
@@ -3324,7 +3405,7 @@ def login_page():
 
         if not demo_users:
             if demo_dept in (None, "", "all"):
-                st.info("💡 提示：未读取到任一 demo 用户文件。可运行 `python3 get_open_ids.py <一级部门名>` 生成（如 人力资源部、研发质量保障部、财富顾问部、资产管理部、金融产品与研究部、金融运营部）。")
+                st.info("💡 提示：未读取到任一 demo 用户文件。可运行 `python3 get_open_ids.py <一级部门名>` 生成（如 人力资源部、研发质量保障部、财富顾问部、资产管理部、金融产品与研究部、金融运营部、战略发展部）。")
             elif demo_dept == "hr":
                 st.info("💡 提示：未读取到 demo_users_hr.json，可运行 `python3 get_open_ids.py 人力资源部` 生成。")
             elif demo_dept == "wealth":
@@ -3335,6 +3416,8 @@ def login_page():
                 st.info("💡 提示：未读取到 demo_users_fin_product.json，可运行 `python3 get_open_ids.py 金融产品与研究部 > demo_users_fin_product.json` 生成。")
             elif demo_dept == "fin_ops":
                 st.info("💡 提示：未读取到 demo_users_fin_ops.json，可运行 `python3 get_open_ids.py 金融运营部 > demo_users_fin_ops.json` 生成。")
+            elif demo_dept == "strategy":
+                st.info("💡 提示：未读取到 demo_users_strategy.json，可运行 `python3 get_open_ids.py 战略发展部 > demo_users_strategy.json` 生成。")
             else:
                 st.info("💡 提示：未读取到 demo_users.json，可参考 demo_users.example.json 创建本地测试账号。")
         if show_demo_only:
@@ -4951,9 +5034,10 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                         if pre_check_fail:
                             st.error(f"❌ 以下人员尚未完成评分并保存草稿，无法提交：{', '.join(pre_check_fail[:5])}{'...' if len(pre_check_fail) > 5 else ''}")
                         else:
-                            with st.spinner("正在提交并锁定全部下属绩效..."):
-                                submitted_cnt = 0
-                                err_msgs = []
+                            # 写入飞书后必须 clear 缓存，否则 rerun 仍读到旧记录（上级评价是否完成 不更新，页面无法锁定）
+                            submitted_cnt = 0
+                            err_msgs = []
+                            with st.spinner("正在提交并锁定全部下属绩效…就快完成了ƪ(˘⌣˘)┐"):
                                 for sub in my_direct_subs:
                                     sf = sub.get("fields", {})
                                     rid = sub.get("record_id")
@@ -4973,15 +5057,16 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                         submitted_cnt += 1
                                     else:
                                         err_msgs.append(f"{sub_name}: {err}")
-                                if submitted_cnt > 0:
-                                    st.success(f"✅ 已成功提交 {submitted_cnt} 人！")
-                                    st.balloons()
-                                    time.sleep(1.5)
-                                    st.rerun()
-                                if err_msgs:
-                                    st.error("❌ 部分提交失败：" + "; ".join(err_msgs[:3]))
-                                if submitted_cnt == 0 and not err_msgs:
-                                    st.info("💡 当前暂无待提交的暂存评价。")
+                            if submitted_cnt > 0:
+                                fetch_all_records_safely.clear()
+                                st.success(f"✅ 已成功提交 {submitted_cnt} 人！")
+                                st.snow()
+                                time.sleep(1.2)
+                                st.rerun()
+                            if err_msgs:
+                                st.error("❌ 部分提交失败：" + "; ".join(err_msgs[:3]))
+                            if submitted_cnt == 0 and not err_msgs:
+                                st.info("💡 当前暂无待提交的暂存评价。")
                     st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
                     st.markdown("---")
 
@@ -5258,7 +5343,12 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                             st.success("💡 提示：已妥善保存。")
                         if mgr_save_draft_disabled and is_direct_sub and not is_mgr_submitted and not step2_can_submit:
                             st.caption("⚠️ 保存草稿的目的是为了多个下属进行综合考虑，因此请先完成工作业绩、通用能力、管理目标（如有）的评分及考核评语后，再保存草稿。")
-                        st.info("💡提示：请点击「保存草稿」，全部下属评价之后，在下属名单上方点击「确认提交」，视为上级评分完成。")
+                        st.info(
+                            "💡提示：  \n"
+                            "1、对下属评价后，请点击「保存草稿」保存下属绩效便于横向比较。  \n"
+                            "2、评价完全部下属后，请在页面上方「👇 下属评估名单」模块点击「确认提交」，提交则视为上级评分完成。  \n"
+                            "3、如果「保存草稿」后，页面上方「👇 下属评估名单」考核结果没有更新，烦请刷新页面。"
+                        )
                     else:
                         st.error("未找到对应下属的数据，请返回重试。")
                         st.button("🔙 返回", on_click=return_to_self)
@@ -5480,7 +5570,13 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                 break
                         dept_btn_disabled = not dept_has_any_pending or not dept_can_confirm_all or _dept_edit_disabled
 
-                        st.info("💡 提示：默认为前序调整结果。全部调整完毕请点击「确认本次调整」按钮。提交后不可再修改。")
+                        st.info(
+                            "💡 提示：  \n"
+                            "1、默认为前序调整结果。  \n"
+                            "2、请尽量符合「视图与报表」中「分管范围总数」的配额。  \n"
+                            "3、如超过上限（如部门人数<10人或由分管高管统一分配），请知会上级。  \n"
+                            "4、全部调整完毕请点击「确认本次调整」按钮。提交后不可再修改。"
+                        )
 
                         st.markdown("<div class='dept-confirm-marker'></div>", unsafe_allow_html=True)
 
@@ -5682,8 +5778,6 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
 
                                     init_idx = 0
 
-                            is_modified = (adj_grade_default in GRADE_OPTIONS and mgr_grade in GRADE_OPTIONS and adj_grade_default != mgr_grade)
-
                             c5_inner1, c5_inner2 = c5.columns([4, 1], vertical_alignment="center")
 
                             with c5_inner1:
@@ -5704,11 +5798,57 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
 
                                 )
 
+                            new_grade = st.session_state.get(f"dept_adj_grade_{r_id}", new_grade)
+                            is_modified_ui = (
+                                mgr_grade in GRADE_OPTIONS
+                                and new_grade in GRADE_OPTIONS
+                                and new_grade != mgr_grade
+                            )
+
                             with c5_inner2:
-
-                                if is_modified:
-
-                                    st.markdown("<div style='color:#1E90FF;font-size:12px;font-weight:700;line-height:38px;white-space:nowrap;' title='考核等级与调整等级不一致'>已改</div>", unsafe_allow_html=True)
+                                _ack_div = (
+                                    "<div style='color:#1E90FF;font-size:12px;font-weight:700;"
+                                    "line-height:38px;white-space:nowrap;text-align:center;' title='{title}'>{body}</div>"
+                                )
+                                if disable_adjust and done_flag:
+                                    if (
+                                        adj_grade_default in GRADE_OPTIONS
+                                        and mgr_grade in GRADE_OPTIONS
+                                        and adj_grade_default != mgr_grade
+                                    ):
+                                        st.markdown(
+                                            _ack_div.format(
+                                                title="考核等级与调整等级不一致",
+                                                body="已改",
+                                            ),
+                                            unsafe_allow_html=True,
+                                        )
+                                elif is_modified_ui and not disable_adjust:
+                                    _ack_key = f"dept_adj_ack_{r_id}"
+                                    _sig_key = f"dept_adj_ack_sig_{r_id}"
+                                    _sig = str(new_grade)
+                                    _acked = (
+                                        st.session_state.get(_ack_key)
+                                        and st.session_state.get(_sig_key) == _sig
+                                    )
+                                    if _acked:
+                                        st.markdown(
+                                            _ack_div.format(
+                                                title="已标记本次调整",
+                                                body="已改",
+                                            ),
+                                            unsafe_allow_html=True,
+                                        )
+                                    else:
+                                        if st.button(
+                                            "✓",
+                                            key=f"dept_adj_ack_btn_{r_id}",
+                                            help="确认已查看此次调整",
+                                            use_container_width=True,
+                                        ):
+                                            st.session_state[_ack_key] = True
+                                            st.session_state[_sig_key] = _sig
+                                            st.rerun()
 
                             # 选中等级即自动写入「一级部门调整考核结果」（仅当未确认且用户实际修改时保存）
 
@@ -6015,87 +6155,104 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                         if sel_grade not in GRADE_OPTIONS:
                             vp_can_confirm_all = False
                             break
-                    vp_btn_disabled = not vp_has_any_pending or not vp_can_confirm_all or _vp_edit_disabled
+                    _vp_report_scope_quota = _vp_report_scope_for_quota(all_records, user_name, current_cycle, st.session_state)
+                    vp_quota_exceeded = _vp_quota_exceeded_for_confirm(st.session_state, _vp_report_scope_quota)
+                    vp_btn_disabled = not vp_has_any_pending or not vp_can_confirm_all or _vp_edit_disabled or vp_quota_exceeded
 
-                    st.info("💡 提示：默认为前序调整结果。全部调整完毕请点击「确认本次调整」按钮。提交后不可再修改。")
+                    st.info(
+                        "💡 提示：  \n"
+                        "1、默认为前序调整结果。  \n"
+                        "2、请必须符合「视图与报表」中「分管范围总数」的配额，不得超出上限。  \n"
+                        "3、全部调整完毕请点击「确认本次调整」按钮。提交后不可再修改。"
+                    )
+                    if vp_quota_exceeded:
+                        st.error(
+                            "❗️提示：当前人数不符合公司配额比例。请点击 「视图与报表」页面→「分管范围总数」 模块查看各级别配额，修改符合后提交。"
+                        )
 
                     st.markdown("<div class='vp-confirm-marker'></div>", unsafe_allow_html=True)
 
                     if st.button("确认本次调整", type="primary", key="btn_vp_confirm_all", use_container_width=True, disabled=vp_btn_disabled):
 
-                        ok_cnt = 0
-
-                        fail_cnt = 0
-
-                        with st.spinner("正在批量确认，请稍候..."):
-
-                            for rec in vp_records:
-
-                                ff = rec.get("fields", {})
-
-                                r_id_all = rec.get("record_id")
-
-                                mgr_grade_all = extract_text(ff.get("考核结果", "-")).strip() or "-"
-
-                                dept_done_all = extract_text(ff.get("一级部门调整完毕", "")).strip() == "是"
-
-                                if not dept_done_all:
-
-                                    continue
-
-                                vp_done_all = extract_text(ff.get("分管高管调整完毕", "")).strip() == "是"
-
-                                if vp_done_all:
-
-                                    continue
-
-                                adj_existing = extract_text(ff.get("分管高管调整考核结果", "")).strip()
-
-                                dept_adj_all = extract_text(ff.get("一级部门调整考核结果", "")).strip()
-
-                                dept_adj_all = dept_adj_all if dept_adj_all in GRADE_OPTIONS else mgr_grade_all
-
-                                default_grade = adj_existing if adj_existing in GRADE_OPTIONS else (dept_adj_all if dept_adj_all in GRADE_OPTIONS else mgr_grade_all)
-
-                                selected_grade = st.session_state.get(f"vp_adj_grade_{r_id_all}", default_grade)
-
-                                if selected_grade not in GRADE_OPTIONS:
-
-                                    selected_grade = default_grade
-
-                                update_data = {
-
-                                    "分管高管调整考核结果": selected_grade,
-
-                                    "分管高管调整完毕": "是",
-
-                                }
-
-                                ok, _msg = update_record_safely(APP_TOKEN, TABLE_ID, r_id_all, update_data)
-
-                                if ok:
-
-                                    ok_cnt += 1
-
-                                else:
-
-                                    fail_cnt += 1
-
-                                time.sleep(0.25)
-
-                        if fail_cnt == 0:
-
-                            vp_msg_box.info(f"分管高管已确认调整，共完成 {ok_cnt} 人。")
-
-                            fetch_all_records_safely.clear()
-
+                        _scope_chk = _vp_report_scope_for_quota(all_records, user_name, current_cycle, st.session_state)
+                        if _vp_quota_exceeded_for_confirm(st.session_state, _scope_chk):
+                            vp_msg_box.error(
+                                "❗️提示：当前人数不符合公司配额比例。请点击 「视图与报表」页面→「分管范围总数」 模块查看各级别配额，修改符合后提交。"
+                            )
                         else:
+                            ok_cnt = 0
 
-                            vp_msg_box.error(f"确认完成 {ok_cnt} 人，失败 {fail_cnt} 人，请重试。")
+                            fail_cnt = 0
 
-                        time.sleep(0.6)
+                            with st.spinner("正在批量确认，请稍候..."):
 
-                        st.rerun()
+                                for rec in vp_records:
+
+                                    ff = rec.get("fields", {})
+
+                                    r_id_all = rec.get("record_id")
+
+                                    mgr_grade_all = extract_text(ff.get("考核结果", "-")).strip() or "-"
+
+                                    dept_done_all = extract_text(ff.get("一级部门调整完毕", "")).strip() == "是"
+
+                                    if not dept_done_all:
+
+                                        continue
+
+                                    vp_done_all = extract_text(ff.get("分管高管调整完毕", "")).strip() == "是"
+
+                                    if vp_done_all:
+
+                                        continue
+
+                                    adj_existing = extract_text(ff.get("分管高管调整考核结果", "")).strip()
+
+                                    dept_adj_all = extract_text(ff.get("一级部门调整考核结果", "")).strip()
+
+                                    dept_adj_all = dept_adj_all if dept_adj_all in GRADE_OPTIONS else mgr_grade_all
+
+                                    default_grade = adj_existing if adj_existing in GRADE_OPTIONS else (dept_adj_all if dept_adj_all in GRADE_OPTIONS else mgr_grade_all)
+
+                                    selected_grade = st.session_state.get(f"vp_adj_grade_{r_id_all}", default_grade)
+
+                                    if selected_grade not in GRADE_OPTIONS:
+
+                                        selected_grade = default_grade
+
+                                    update_data = {
+
+                                        "分管高管调整考核结果": selected_grade,
+
+                                        "分管高管调整完毕": "是",
+
+                                    }
+
+                                    ok, _msg = update_record_safely(APP_TOKEN, TABLE_ID, r_id_all, update_data)
+
+                                    if ok:
+
+                                        ok_cnt += 1
+
+                                    else:
+
+                                        fail_cnt += 1
+
+                                    time.sleep(0.25)
+
+                            if fail_cnt == 0:
+
+                                vp_msg_box.info(f"分管高管已确认调整，共完成 {ok_cnt} 人。")
+
+                                fetch_all_records_safely.clear()
+
+                            else:
+
+                                vp_msg_box.error(f"确认完成 {ok_cnt} 人，失败 {fail_cnt} 人，请重试。")
+
+                            time.sleep(0.6)
+
+                            st.rerun()
 
                     # 表头与展示：姓名(工号)、一级部门/岗位、自评等级、考核等级、调整等级①、调整等级②（分散居中对齐，表头不断行，列间距适中）
 
@@ -7243,7 +7400,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                                 dept_df_display = dept_df
                             st.dataframe(dept_df_display, use_container_width=True, hide_index=True)
                             if is_vp:
-                                st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 提示：各部门含一级部门负责人，高管单列；如果一级部门负责人和高管为同一人，则一级部门中不含，高管单列。</div>", unsafe_allow_html=True)
+                                st.markdown("<div style='text-align:left;font-size:12px;color:#9aa0a6;margin-top:8px;'>💡 提示：各部门含一级部门负责人；如果一级部门负责人和高管为同一人，则一级部门中不含。</div>", unsafe_allow_html=True)
 
     # ==========================================
     # 🟢 模块 3：历史信息 (员工个人不显示)
@@ -7292,7 +7449,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                     if not history_scoped:
                         st.info("💡 提示：您暂无下属，无历史绩效档案可查看。")
                     else:
-                        _grade_colors = {"S": "#4CAFEE", "A": "#4CAFEE", "B+": "#8BC34A", "B": "#90A4AE", "B-": "#FFC107", "C": "#F44336"}
+                        _grade_colors = {"S": "#00BCD4", "A": "#5C6BC0", "B+": "#8BC34A", "B": "#90A4AE", "B-": "#FFC107", "C": "#F44336"}
                         st.markdown("<div class='module-title'>👇 下属历史绩效等级</div>", unsafe_allow_html=True)
 
                         # 筛选框：工号姓名 / 部门 / 考核等级（分管高管用一级部门，其他用二级-三级-四级链路）
@@ -7398,7 +7555,7 @@ def main_app():  # pyright: ignore[reportGeneralTypeIssues]
                 perf_cycle = extract_text(fields.get("上一次绩效考核对应周期", "暂无数据"))
                 last_perf_result = extract_text(fields.get("上一次绩效考核结果", "暂无数据"))
                 last_comment = extract_text(fields.get("上一次绩效考核评语", "暂无评语"))
-                _grade_colors = {"S": "#4CAFEE", "A": "#4CAFEE", "B+": "#8BC34A", "B": "#90A4AE", "B-": "#FFC107", "C": "#F44336"}
+                _grade_colors = {"S": "#00BCD4", "A": "#5C6BC0", "B+": "#8BC34A", "B": "#90A4AE", "B-": "#FFC107", "C": "#F44336"}
                 _res_color = _grade_colors.get(last_perf_result, "#b7bdc8")
 
                 st.markdown(
