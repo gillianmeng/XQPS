@@ -8,7 +8,7 @@
 - **上级评分**：管理者对下属进行评分与考核评语
 - **综合调整**：一级部门负责人、分管高管对考核结果进行校准
 - **历史信息**：查看上一次绩效结果与评语
-- **演示入口**：支持六部门合并或单部门测试账号登录（含金融产品与研究部、金融运营部）
+- **演示入口**：支持七部门合并或单部门测试账号登录（含战略发展部、金融产品与研究部、金融运营部）
 - **扫码登录**：飞书 App 扫码授权（需 qrcode、pillow）
 - **制度学习**：侧边栏链接至绩效管理制度文档
 
@@ -61,19 +61,20 @@ APP_ENV=staging ENABLE_DEMO_LOGIN=true streamlit run new_app.py --server.port 85
 
 **演示入口 URL：**（端口与 `streamlit --server.port` 一致，默认 8501；`./run_demo.sh` 可用环境变量 `PORT` 覆盖）
 
-- **合并入口（六部门）**：http://localhost:8501/?demo_entry=1 或 ?demo_entry=1&demo_dept=all
+- **合并入口（七部门）**：http://localhost:8501/?demo_entry=1 或 ?demo_entry=1&demo_dept=all
 - 人力资源部：http://localhost:8501/?demo_entry=1&demo_dept=hr
 - 财富顾问部：http://localhost:8501/?demo_entry=1&demo_dept=wealth
 - 研发质量保障部：http://localhost:8501/?demo_entry=1&demo_dept=rd
 - 资产管理部：http://localhost:8501/?demo_entry=1&demo_dept=asset
 - 金融产品与研究部：http://localhost:8501/?demo_entry=1&demo_dept=fin_product
 - 金融运营部：http://localhost:8501/?demo_entry=1&demo_dept=fin_ops
+- 战略发展部：http://localhost:8501/?demo_entry=1&demo_dept=strategy
 
 ### 5. 演示账号配置
 
-默认合并六部门：依次读取 `demo_users_hr.json`、`demo_users_wealth.json`、`demo_users.json`、`demo_users_asset.json`、`demo_users_fin_product.json`、`demo_users_fin_ops.json`（及对应 `.example.json` 回退）并按 `open_id` 去重。
+默认合并七部门：依次读取 `demo_users_hr.json`、`demo_users_wealth.json`、`demo_users.json`、`demo_users_asset.json`、`demo_users_fin_product.json`、`demo_users_fin_ops.json`、`demo_users_strategy.json`（及对应 `.example.json` 回退）并按 `open_id` 去重。
 
-若某部门 `demo_users_*.json` 缺失，会回退到对应 `.example.json`（可能为空）。**金融产品与研究部、金融运营部** 的完整名单已与人力资源部等一致**随仓库发布**；更新名单时用下方命令重新生成后提交。
+若某部门 `demo_users_*.json` 缺失，会回退到对应 `.example.json`（可能为空）。**战略发展部、金融产品与研究部、金融运营部** 等与人力资源部等一致**随仓库发布**；更新名单时用下方命令重新生成后提交。
 
 - 研发质量保障部：`demo_users.json`（参考 `demo_users.example.json`）
 - 人力资源部：`demo_users_hr.json`（参考 `demo_users_hr.example.json`）
@@ -81,6 +82,7 @@ APP_ENV=staging ENABLE_DEMO_LOGIN=true streamlit run new_app.py --server.port 85
 - 资产管理部：`demo_users_asset.json`（参考 `demo_users_asset.example.json`）
 - 金融产品与研究部：`demo_users_fin_product.json`（参考 `demo_users_fin_product.example.json`）
 - 金融运营部：`demo_users_fin_ops.json`（参考 `demo_users_fin_ops.example.json`）
+- 战略发展部：`demo_users_strategy.json`（参考 `demo_users_strategy.example.json`）
 
 从飞书拉取真实员工 open_id：
 
@@ -91,6 +93,7 @@ python3 get_open_ids.py 研发质量保障部  # 输出到 demo_users.json
 python3 get_open_ids.py 资产管理部 > demo_users_asset.json
 python3 get_open_ids.py 金融产品与研究部 > demo_users_fin_product.json
 python3 get_open_ids.py 金融运营部 > demo_users_fin_ops.json
+python3 get_open_ids.py 战略发展部 > demo_users_strategy.json
 python3 get_open_ids.py -l   # 列出所有一级部门
 ```
 
@@ -114,7 +117,9 @@ XQPS/
 ├── demo_users.json         # 研发质量部测试账号（勿提交）
 ├── demo_users_hr.json      # 人力资源部测试账号（勿提交）
 ├── demo_users_wealth.json  # 财富顾问部测试账号（勿提交）
-└── demo_users_asset.json   # 资产管理部测试账号（勿提交）
+├── demo_users_asset.json   # 资产管理部测试账号（勿提交）
+├── demo_users_fin_product.json / demo_users_fin_ops.json
+└── demo_users_strategy.json  # 战略发展部（随仓库发布）
 ```
 
 ## 部署与交接
