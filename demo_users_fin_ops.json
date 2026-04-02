@@ -1,0 +1,130 @@
+{
+  "users": [
+    {
+      "label": "侯芳芳（工号: XQ180）",
+      "name": "侯芳芳",
+      "open_id": "ou_288ca0b07e11f5684d8a6afc17ab14ad",
+      "emp_id": "XQ180",
+      "job_title": "岗位岗位岗位",
+      "role": "管理者",
+      "test_env": "金融运营部"
+    },
+    {
+      "label": "吴迪（工号: XQ450）",
+      "name": "吴迪",
+      "open_id": "ou_0c35383d50741648fadfc9ac13d1c31f",
+      "emp_id": "XQ450",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融运营部"
+    },
+    {
+      "label": "王群（工号: XQ881）",
+      "name": "王群",
+      "open_id": "ou_778be9432e515f6d677a8572d9e6ed02",
+      "emp_id": "XQ881",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融运营部"
+    },
+    {
+      "label": "王擎娟（工号: XQ929）",
+      "name": "王擎娟",
+      "open_id": "ou_72cc87151b6b00a7e0313cc57639f83f",
+      "emp_id": "XQ929",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融运营部"
+    },
+    {
+      "label": "鲁娜（工号: XQ1288）",
+      "name": "鲁娜",
+      "open_id": "ou_27ba485388f5580b93229a1564838813",
+      "emp_id": "XQ1288",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融运营部"
+    },
+    {
+      "label": "房金玲（工号: XQ1755）",
+      "name": "房金玲",
+      "open_id": "ou_0724b3a3c065f5aea7e73fa2b5c6ef23",
+      "emp_id": "XQ1755",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融运营部"
+    },
+    {
+      "label": "刘秀坤（工号: XQ1965）",
+      "name": "刘秀坤",
+      "open_id": "ou_ae20ddcd65898b4cb423e21a4ff363ae",
+      "emp_id": "XQ1965",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融运营部"
+    },
+    {
+      "label": "王懿桢（工号: XQ2192）",
+      "name": "王懿桢",
+      "open_id": "ou_a81fba7829a052c3d326da5dffc30ee4",
+      "emp_id": "XQ2192",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融运营部"
+    },
+    {
+      "label": "遇岫（工号: XQ2204）",
+      "name": "遇岫",
+      "open_id": "ou_436804fdbbbe1f5f483f8aa206723960",
+      "emp_id": "XQ2204",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融运营部"
+    },
+    {
+      "label": "冯星（工号: XQ2395）",
+      "name": "冯星",
+      "open_id": "ou_bdcb524c2ee50e4548edcb9e7e1d5ee6",
+      "emp_id": "XQ2395",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融运营部"
+    },
+    {
+      "label": "赵燕琳（工号: XQ2416）",
+      "name": "赵燕琳",
+      "open_id": "ou_8e8284c29306068e83d2136874794b74",
+      "emp_id": "XQ2416",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融运营部"
+    },
+    {
+      "label": "杜玉婷（工号: XQ2429）",
+      "name": "杜玉婷",
+      "open_id": "ou_ed42e033405199a19f89fbf8cda7ade9",
+      "emp_id": "XQ2429",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融运营部"
+    },
+    {
+      "label": "周静雯（工号: XQ2458）",
+      "name": "周静雯",
+      "open_id": "ou_14cc12211dc6331bc8664c62de3a8b21",
+      "emp_id": "XQ2458",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融运营部"
+    },
+    {
+      "label": "刘佳慧（工号: XQ2456）",
+      "name": "刘佳慧",
+      "open_id": "ou_e4a80036c1c34fc52ba2e01352392625",
+      "emp_id": "XQ2456",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "金融运营部"
+    }
+  ]
+}

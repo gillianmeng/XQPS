@@ -3,3 +3,5 @@ requests
 pandas
 altair
 openpyxl
+qrcode
+pillow

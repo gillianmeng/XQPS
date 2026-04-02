@@ -1,0 +1,274 @@
+{
+  "users": [
+    {
+      "label": "王金凤（工号: XQ870）",
+      "name": "王金凤",
+      "open_id": "ou_aee8a7226599eef1cd45c5062942cd45",
+      "emp_id": "XQ870",
+      "job_title": "资深财富顾问",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "陈鹏飞（工号: XQ1083）",
+      "name": "陈鹏飞",
+      "open_id": "ou_2747d7bc279d0bf29704d15297d105d1",
+      "emp_id": "XQ1083",
+      "job_title": "高级财富顾问",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "王小溪（工号: XQ1208）",
+      "name": "王小溪",
+      "open_id": "ou_d1f71db41168389d6e93400799020a99",
+      "emp_id": "XQ1208",
+      "job_title": "高级财富顾问专家",
+      "role": "管理者",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "周媛（工号: XQ1163）",
+      "name": "周媛",
+      "open_id": "ou_1d22d347c3d850929baf3121b69a3ddf",
+      "emp_id": "XQ1163",
+      "job_title": "高级财富顾问",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "袁懿（工号: XQ2309）",
+      "name": "袁懿",
+      "open_id": "ou_d1d2b57312ba632d0b315810b1918571",
+      "emp_id": "XQ2309",
+      "job_title": "财富顾问",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "薛莹（工号: XQ986）",
+      "name": "薛莹",
+      "open_id": "ou_34fdf2656be4bf826d817342d27fe19d",
+      "emp_id": "XQ986",
+      "job_title": "财富顾问专家",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "李莹（工号: XQ993）",
+      "name": "李莹",
+      "open_id": "ou_ba9ca63099328ea709bbb17681123504",
+      "emp_id": "XQ993",
+      "job_title": "资深财富顾问",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "吴娟（工号: XQ998）",
+      "name": "吴娟",
+      "open_id": "ou_f8340056648b1c1c51a8685b77ce8718",
+      "emp_id": "XQ998",
+      "job_title": "财富顾问专家",
+      "role": "管理者",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "田明露（工号: XQ996）",
+      "name": "田明露",
+      "open_id": "ou_239b58e57b2b66341d8f7ff3dcc2fc15",
+      "emp_id": "XQ996",
+      "job_title": "资深财富顾问",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "马瑞（工号: XQ1996）",
+      "name": "马瑞",
+      "open_id": "ou_2693d9606681683b6fd51eb31ad0c6a6",
+      "emp_id": "XQ1996",
+      "job_title": "财富顾问专家",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "金璐珊（工号: XQ1103）",
+      "name": "金璐珊",
+      "open_id": "ou_1235f79f53534a361c5615fcc9a51f36",
+      "emp_id": "XQ1103",
+      "job_title": "高级销售运营专家",
+      "role": "管理者",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "姚敏（工号: XQ1650）",
+      "name": "姚敏",
+      "open_id": "ou_b57f77e402f3bd27355b708786d763ef",
+      "emp_id": "XQ1650",
+      "job_title": "资深销售运营",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "胡天羽（工号: XQ1792）",
+      "name": "胡天羽",
+      "open_id": "ou_75297ca437e712bd7338440ec01e122a",
+      "emp_id": "XQ1792",
+      "job_title": "销售运营专家",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "刘卉（工号: XQ1627）",
+      "name": "刘卉",
+      "open_id": "ou_7928ea6817573791b9f221cb654faa46",
+      "emp_id": "XQ1627",
+      "job_title": "总监2",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "韦薇（工号: XQ1631）",
+      "name": "韦薇",
+      "open_id": "ou_d737b31fb123a46579fbf3ac5bc072b3",
+      "emp_id": "XQ1631",
+      "job_title": "总监3",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "傅昕（工号: XQ1587）",
+      "name": "傅昕",
+      "open_id": "ou_d9efcc5a2700e6e207fc4f3caa1eee82",
+      "emp_id": "XQ1587",
+      "job_title": "资深团队经理2",
+      "role": "管理者",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "李曼妮（工号: XQ1982）",
+      "name": "李曼妮",
+      "open_id": "ou_631a6a4ea016ebc437195970ffd58126",
+      "emp_id": "XQ1982",
+      "job_title": "总监2",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "杨莅（工号: XQ1621）",
+      "name": "杨莅",
+      "open_id": "ou_37bf7f9dc4728295646e247259f58d6c",
+      "emp_id": "XQ1621",
+      "job_title": "副总监3",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "刘可人（工号: XQ1634）",
+      "name": "刘可人",
+      "open_id": "ou_5308585ba86e8c34d1cbe412f0105998",
+      "emp_id": "XQ1634",
+      "job_title": "副总监2",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "黄祎（工号: XQ1611）",
+      "name": "黄祎",
+      "open_id": "ou_1111aa477ddbc485de051f0e0f06b876",
+      "emp_id": "XQ1611",
+      "job_title": "资深团队经理1",
+      "role": "管理者",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "章丞民（工号: XQ2047）",
+      "name": "章丞民",
+      "open_id": "ou_50e310e2f312537aab3130a88294c86d",
+      "emp_id": "XQ2047",
+      "job_title": "总监1",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "孙莹（工号: XQ1590）",
+      "name": "孙莹",
+      "open_id": "ou_691d4f556e536e47019f62f8548afa5d",
+      "emp_id": "XQ1590",
+      "job_title": "总监2",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "史宇婷（工号: XQ1624）",
+      "name": "史宇婷",
+      "open_id": "ou_691f0f7d3f0c24096e5ec207ba56360f",
+      "emp_id": "XQ1624",
+      "job_title": "副总监2",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "刘昭婷（工号: XQ1654）",
+      "name": "刘昭婷",
+      "open_id": "ou_a440d7bdec52531fcb1ca9e077d71d2d",
+      "emp_id": "XQ1654",
+      "job_title": "总监1",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "任靓（工号: XQ1588）",
+      "name": "任靓",
+      "open_id": "ou_9d3d34107140a5a652af998d215460d6",
+      "emp_id": "XQ1588",
+      "job_title": "资深总监",
+      "role": "管理者",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "钱永红（工号: XQ1646）",
+      "name": "钱永红",
+      "open_id": "ou_ab8a6f9695f42e4e9b5185c7d937b3a0",
+      "emp_id": "XQ1646",
+      "job_title": "资深投资顾问",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "谭皓雷（工号: XQ1087）",
+      "name": "谭皓雷",
+      "open_id": "ou_2881d146b614ef7430ad75e51c8eb253",
+      "emp_id": "XQ1087",
+      "job_title": "高级私募业务专家",
+      "role": "管理者",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "殷悦佳（工号: XQ2268）",
+      "name": "殷悦佳",
+      "open_id": "ou_d70b36da555b8520493e0286cbd1a2ec",
+      "emp_id": "XQ2268",
+      "job_title": "资深增长运营",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "刘皓然（工号: XQ2313）",
+      "name": "刘皓然",
+      "open_id": "ou_9573f7c9a75887304537431f7da4b3f9",
+      "emp_id": "XQ2313",
+      "job_title": "资深增长运营",
+      "role": "员工",
+      "test_env": "财富顾问部"
+    },
+    {
+      "label": "刘江涛（工号: XQ004）",
+      "name": "刘江涛",
+      "open_id": "ou_5d48f9da909338c063526a4fb24a513f",
+      "emp_id": "XQ004",
+      "job_title": "副总裁",
+      "role": "管理者",
+      "test_env": "财富顾问部"
+    }
+  ]
+}

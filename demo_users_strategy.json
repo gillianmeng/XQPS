@@ -1,0 +1,40 @@
+{
+  "users": [
+    {
+      "label": "汤明阳（工号: XQ1867）",
+      "name": "汤明阳",
+      "open_id": "ou_e2a3751863291036989a7b451fdaf641",
+      "emp_id": "XQ1867",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "战略发展部"
+    },
+    {
+      "label": "关惠文（工号: XQ2264）",
+      "name": "关惠文",
+      "open_id": "ou_2f1bae81fd6b227b780383a1e741ff6b",
+      "emp_id": "XQ2264",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "战略发展部"
+    },
+    {
+      "label": "杨彦（工号: XQ2361）",
+      "name": "杨彦",
+      "open_id": "ou_39dad21c5ed78d9a4965cf3e355f6980",
+      "emp_id": "XQ2361",
+      "job_title": "岗位岗位岗位",
+      "role": "员工",
+      "test_env": "战略发展部"
+    },
+    {
+      "label": "王懿（工号: XQ1818）",
+      "name": "王懿",
+      "open_id": "ou_65e9bd416b13bff140c77673c2149d8b",
+      "emp_id": "XQ1818",
+      "job_title": "岗位岗位岗位",
+      "role": "管理者",
+      "test_env": "战略发展部"
+    }
+  ]
+}

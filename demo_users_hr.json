@@ -1,0 +1,130 @@
+{
+  "users": [
+    {
+      "label": "孙春悦（工号: XQ1032）",
+      "name": "孙春悦",
+      "open_id": "ou_30d6ab6d1a4cded63ffcd324202823a8",
+      "emp_id": "XQ1032",
+      "job_title": "高级HRBP专家",
+      "role": "管理者",
+      "test_env": "人力资源部"
+    },
+    {
+      "label": "杨聪敏（工号: XQ1156）",
+      "name": "杨聪敏",
+      "open_id": "ou_3c121c7b1c27fcc75e27a50855b7b26f",
+      "emp_id": "XQ1156",
+      "job_title": "资深招聘",
+      "role": "员工",
+      "test_env": "人力资源部"
+    },
+    {
+      "label": "郭嘉蕊（工号: XQ2434）",
+      "name": "郭嘉蕊",
+      "open_id": "ou_18f044aadd7270dedd1bb7f614538bdf",
+      "emp_id": "XQ2434",
+      "job_title": "人力资源专员",
+      "role": "员工",
+      "test_env": "人力资源部"
+    },
+    {
+      "label": "孟凡卓（工号: XQ1308）",
+      "name": "孟凡卓",
+      "open_id": "ou_1d34e4f46768f1bf411fb38b2d758e32",
+      "emp_id": "XQ1308",
+      "job_title": "HRBP",
+      "role": "管理者",
+      "test_env": "人力资源部"
+    },
+    {
+      "label": "曹亦雄（工号: XQ1510）",
+      "name": "曹亦雄",
+      "open_id": "ou_dc9d49429321e7970522f62627df9f62",
+      "emp_id": "XQ1510",
+      "job_title": "资深HRBP",
+      "role": "员工",
+      "test_env": "人力资源部"
+    },
+    {
+      "label": "张灵菲（工号: XQ258）",
+      "name": "张灵菲",
+      "open_id": "ou_8ef6b61b30d3cf914f2483ac7668baf3",
+      "emp_id": "XQ258",
+      "job_title": "资深HRBP",
+      "role": "员工",
+      "test_env": "人力资源部"
+    },
+    {
+      "label": "郑红平（工号: XQ1451）",
+      "name": "郑红平",
+      "open_id": "ou_0c6588c3d9de57b76a108eb4edd3e6b4",
+      "emp_id": "XQ1451",
+      "job_title": "高级HRBP",
+      "role": "员工",
+      "test_env": "人力资源部"
+    },
+    {
+      "label": "张燕（工号: XQ555）",
+      "name": "张燕",
+      "open_id": "ou_49518550fadec720eaed3de16e5439c8",
+      "emp_id": "XQ555",
+      "job_title": "薪酬福利专家",
+      "role": "员工",
+      "test_env": "人力资源部"
+    },
+    {
+      "label": "张慧敏（工号: XQ653）",
+      "name": "张慧敏",
+      "open_id": "ou_0fd7f0eb98fc8022918ef0bb2ac1bde5",
+      "emp_id": "XQ653",
+      "job_title": "高级薪酬福利专家",
+      "role": "员工",
+      "test_env": "人力资源部"
+    },
+    {
+      "label": "王倩倩（工号: XQ2377）",
+      "name": "王倩倩",
+      "open_id": "ou_aecc4164f76682a06bf400bf40955fed",
+      "emp_id": "XQ2377",
+      "job_title": "员工关系",
+      "role": "员工",
+      "test_env": "人力资源部"
+    },
+    {
+      "label": "韩阳（工号: XQ040）",
+      "name": "韩阳",
+      "open_id": "ou_0006244d5327fb173fa68c444c9d4f1b",
+      "emp_id": "XQ040",
+      "job_title": "资深培训与文化",
+      "role": "员工",
+      "test_env": "人力资源部"
+    },
+    {
+      "label": "谭莹（工号: XQ888）",
+      "name": "谭莹",
+      "open_id": "ou_eec8e45c2d4a23514ad3b1e9053ddd2c",
+      "emp_id": "XQ888",
+      "job_title": "人力资源总监",
+      "role": "管理者",
+      "test_env": "人力资源部"
+    },
+    {
+      "label": "孙羽超（工号: XQ1091）",
+      "name": "孙羽超",
+      "open_id": "ou_a660ae87bf32efbcaea596286190f2bd",
+      "emp_id": "XQ1091",
+      "job_title": "人才发展专家",
+      "role": "员工",
+      "test_env": "人力资源部"
+    },
+    {
+      "label": "聂多（工号: XQ2424）",
+      "name": "聂多",
+      "open_id": "ou_733d0ae6e6d184c9d989c35297f6ba12",
+      "emp_id": "XQ2424",
+      "job_title": "人力资源专员",
+      "role": "员工",
+      "test_env": "人力资源部"
+    }
+  ]
+}

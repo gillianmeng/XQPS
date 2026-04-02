@@ -1,0 +1,4 @@
+# XQPS 主题配置：默认深色
+[theme]
+base = "dark"
+primaryColor = "#1E90FF"

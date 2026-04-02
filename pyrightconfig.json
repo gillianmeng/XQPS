@@ -1,0 +1,8 @@
+{
+  "reportMissingImports": false,
+  "reportMissingModuleSource": false,
+  "reportGeneralTypeIssues": "none",
+  "reportArgumentType": false,
+  "reportPossiblyUnboundVariable": false,
+  "reportCallIssue": false
+}

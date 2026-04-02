@@ -1,0 +1,20 @@
+{
+  "users": [
+    {
+      "label": "示例员工（资产管理部·工号: XQ0001）",
+      "name": "示例员工",
+      "open_id": "ou_asset_demo_1",
+      "emp_id": "XQ0001",
+      "job_title": "资产管理专员",
+      "role": "员工"
+    },
+    {
+      "label": "示例管理者（资产管理部·工号: XQ0002）",
+      "name": "示例管理者",
+      "open_id": "ou_asset_demo_2",
+      "emp_id": "XQ0002",
+      "job_title": "资产管理部负责人",
+      "role": "管理者"
+    }
+  ]
+}

@@ -1,0 +1,184 @@
+{
+  "users": [
+    {
+      "label": "张舒冰（工号: XQ1889）",
+      "name": "张舒冰",
+      "open_id": "ou_6f5581fbc6406943b0b7812bcfcb5842",
+      "emp_id": "XQ1889",
+      "job_title": "高管",
+      "role": "管理者",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "付文红（工号: XQ224）",
+      "name": "付文红",
+      "open_id": "ou_673ee09f6b9cd211d0538c0a47fc409a",
+      "emp_id": "XQ224",
+      "job_title": "资深私募业务专家",
+      "role": "管理者",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "武嘉璐（工号: XQ991）",
+      "name": "武嘉璐",
+      "open_id": "ou_a74615c343b5f26895780d64f099e41b",
+      "emp_id": "XQ991",
+      "job_title": "资深客户经理",
+      "role": "员工",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "李翔（工号: XQ1234）",
+      "name": "李翔",
+      "open_id": "ou_6d16b93535d6f935cf06005bf718a32d",
+      "emp_id": "XQ1234",
+      "job_title": "资管机构营销专家",
+      "role": "员工",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "童新宇（工号: XQ1788）",
+      "name": "童新宇",
+      "open_id": "ou_0e5d170a559a017b7b503539745f3953",
+      "emp_id": "XQ1788",
+      "job_title": "资深私募产品经理",
+      "role": "员工",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "李悦垚（工号: XQ2048）",
+      "name": "李悦垚",
+      "open_id": "ou_47ac8fbca1db658feb7039c29c1129a4",
+      "emp_id": "XQ2048",
+      "job_title": "市场营销专家",
+      "role": "员工",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "马尧（工号: XQ1194）",
+      "name": "马尧",
+      "open_id": "ou_254466dd97b3f1fcfb47155c0f23c620",
+      "emp_id": "XQ1194",
+      "job_title": "资深交易员",
+      "role": "员工",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "付利利（工号: XQ774）",
+      "name": "付利利",
+      "open_id": "ou_956000b404879767f9d6a982cac0df80",
+      "emp_id": "XQ774",
+      "job_title": "金融运营专家",
+      "role": "员工",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "谭欣（工号: XQ1175）",
+      "name": "谭欣",
+      "open_id": "ou_25b8d5375ccea57411f2ba36be8ff625",
+      "emp_id": "XQ1175",
+      "job_title": "资深金融产品运营",
+      "role": "员工",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "任鹰（工号: XQ2021）",
+      "name": "任鹰",
+      "open_id": "ou_76261bf0a72d703bed641eec55b8cf5d",
+      "emp_id": "XQ2021",
+      "job_title": "高级私募业务专家",
+      "role": "管理者",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "吴蕊（工号: XQ2148）",
+      "name": "吴蕊",
+      "open_id": "ou_5fceabe37d40e4f48b9c51421f204d0a",
+      "emp_id": "XQ2148",
+      "job_title": "金融产品运营",
+      "role": "员工",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "侯庆玲（工号: XQ2183）",
+      "name": "侯庆玲",
+      "open_id": "ou_51b7b3e18fe58a8df48cfe67856416ca",
+      "emp_id": "XQ2183",
+      "job_title": "金融运营专员",
+      "role": "员工",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "赵毅（工号: XQ2120）",
+      "name": "赵毅",
+      "open_id": "ou_a93cf0868a525f36c1c7cec80c159fcd",
+      "emp_id": "XQ2120",
+      "job_title": "量化研究专家",
+      "role": "管理者",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "王畅（工号: XQ2125）",
+      "name": "王畅",
+      "open_id": "ou_7867ce87e841ec0e396440e81361bd6d",
+      "emp_id": "XQ2125",
+      "job_title": "高级基金研究",
+      "role": "员工",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "王可欣（工号: XQ2334）",
+      "name": "王可欣",
+      "open_id": "ou_1ce1b3fc80cec363bd0430a4c2e9cfeb",
+      "emp_id": "XQ2334",
+      "job_title": "基金研究员",
+      "role": "员工",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "陈岱（工号: XQ1592）",
+      "name": "陈岱",
+      "open_id": "ou_a007a95b98854407ea033988980b672a",
+      "emp_id": "XQ1592",
+      "job_title": "高级私募机构专家",
+      "role": "员工",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "许瀚秋（工号: XQ2031）",
+      "name": "许瀚秋",
+      "open_id": "ou_1a0f5897dab7b11f3f38509b832cbd93",
+      "emp_id": "XQ2031",
+      "job_title": "资深策略研究",
+      "role": "员工",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "史旭超（工号: XQ2110）",
+      "name": "史旭超",
+      "open_id": "ou_8cfe360af0df4c2ac11208b7949d4075",
+      "emp_id": "XQ2110",
+      "job_title": "投资经理专家",
+      "role": "员工",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "李雅昆（工号: XQ2232）",
+      "name": "李雅昆",
+      "open_id": "ou_571ba9972126e80825d0f09e2eb469bf",
+      "emp_id": "XQ2232",
+      "job_title": "高级策略研究员",
+      "role": "员工",
+      "test_env": "资产管理部"
+    },
+    {
+      "label": "杨鑫斌（工号: XQ2081）",
+      "name": "杨鑫斌",
+      "open_id": "ou_143dc1d7d6d181f62b4cb4afd6cc619a",
+      "emp_id": "XQ2081",
+      "job_title": "研究与投资部资深专家",
+      "role": "管理者",
+      "test_env": "资产管理部"
+    }
+  ]
+}
